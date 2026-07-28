@@ -8,9 +8,16 @@ The project name is **Calibr**. Package metadata, the README, and steering/conte
 
 ## Goal
 
-Calibr is a medium-frequency, calibration-driven market maker for Kalshi binary contracts. The system should estimate a fair probability, quote inventory-aware two-sided prices, enforce risk limits, and evaluate both calibration and trading performance. Kalshi is the primary venue; Polymarket is a stretch goal.
+Calibr is a Python/PostgreSQL, medium-frequency market-data and simulation system for Kalshi binary contracts. Its core outcome is to collect and normalize full-depth order books across the tracked Kalshi Fed-rate markets, then replay timestamped snapshots to evaluate inventory-aware Avellaneda--Stoikov market-making strategies under realistic, conservative fill assumptions.
 
-The portfolio thesis is calibration rigor: Brier score and reliability diagrams demonstrate probability quality, while an Avellaneda-Stoikov-style reservation price and risk controls drive market making.
+The primary portfolio thesis is trustworthy market-data infrastructure plus replayable market-microstructure simulation. Fair-value calibration (Brier score and reliability diagrams) remains an optional enhancement and future input to the quoting model; it must not block the core data → replay → quote → evaluate workflow. Kalshi is the primary venue; Polymarket remains a stretch goal.
+
+### Target Portfolio Claims
+
+The project is intended to support these claims once each is backed by implementation and verification evidence:
+
+1. Built a Python/PostgreSQL market data pipeline collecting and normalizing full-depth binary prediction-market order books across 98 Kalshi Fed-rate markets for market microstructure analysis.
+2. Developed replayable exchange simulations from 3,100+ timestamped order-book snapshots to evaluate inventory-aware Avellaneda--Stoikov market-making strategies under realistic market conditions.
 
 ## Repository Map
 
@@ -22,9 +29,9 @@ The portfolio thesis is calibration rigor: Brier score and reliability diagrams 
 | `data/backfill.py` | Retrieves historical/resolved-market data for the labelled calibration dataset. |
 | `db/schema.sql` | Postgres schema for markets, snapshots, trades, resolutions, predictions, calibration runs, and fills. |
 | `db/db.py` | Database connection and schema initialization helpers. |
-| `models/` | Calibration metrics and fair-value models. |
-| `quoting/` | Inventory-aware quote and risk-limit logic. |
-| `backtest/` | Event-driven replay and conservative fill/P&L simulation. |
+| `models/` | Optional calibration metrics and fair-value models. |
+| `quoting/` | Inventory-aware quote generation and risk-limit logic. |
+| `backtest/` | Target location for timestamp-ordered replay, conservative fill simulation, and P&L/risk evaluation. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
 | `STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
@@ -118,11 +125,14 @@ Result: the one-pass ingester reported **98/98 full books captured**. Database c
 
 ## Next Integration Steps
 
+The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
+
 1. Apply the schema migration to the existing local database, then run one full-depth `--once` pass and verify database coverage.
 2. Verify historical backfill against the normalized trade fields, collecting resolved KXFED contracts and trades.
-3. Build a replay reader that loads `raw_book` snapshots in timestamp order.
-4. Start the naïve mid-price fair-value baseline and calibration reporting.
-5. Only then add a WebSocket ingestion path.
+3. Build a deterministic replay reader that loads `raw_book` snapshots in timestamp order and exposes book-level microstructure features.
+4. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
+5. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
+6. Only then consider a WebSocket ingestion path.
 
 ## Safe Test Commands
 

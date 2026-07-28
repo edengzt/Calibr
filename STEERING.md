@@ -1,15 +1,24 @@
 # Calibr — Steering Document
 
-> **One-line description**: A market making system for Kalshi and/or Polymarket that prices binary event contracts using a calibrated probability model (not just the current book), quotes two-sided markets around that fair value with inventory-aware spread adjustment, and continuously tracks calibration (Brier score, reliability diagrams) against realized outcomes.
+> **One-line description**: A Python/PostgreSQL research system that captures and normalizes full-depth Kalshi binary-market order books, then replays that market data to evaluate inventory-aware Avellaneda--Stoikov market-making strategies under conservative, realistic fill assumptions.
 
 > **Maintainer context**: The durable implementation status, repository map, and verified external API notes live in [`.spec/PROJECT_CONTEXT.md`](.spec/PROJECT_CONTEXT.md). Update that file whenever code, dependencies, operational commands, or API assumptions change.
 
-## Current Implementation Status (2026-07-11)
+## Final Portfolio Goal
+
+The finished project should substantiate these two claims:
+
+> Built a Python/PostgreSQL market data pipeline collecting and normalizing full-depth binary prediction-market order books across 98 Kalshi Fed-rate markets for market microstructure analysis.
+
+> Developed replayable exchange simulations from 3,100+ timestamped order-book snapshots to evaluate inventory-aware Avellaneda--Stoikov market-making strategies under realistic market conditions.
+
+This is a market-data and simulation portfolio piece first. Calibration remains a useful optional fair-value input, but it must not block the core deliverable: trustworthy full-depth capture, deterministic replay, and defensible strategy evaluation.
+
+## Current Implementation Status (2026-07-16)
 
 - The public Kalshi connectivity smoke test has succeeded from a developer machine using `https://external-api.kalshi.com/trade-api/v2`.
-- `config.py` still defaults to the retired `https://api.kalshi.com/trade-api/v2` host. Until it is changed, set `KALSHI_BASE_URL` to the external API URL when running the client.
-- `data/kalshi_client.py` now normalizes the current dollar-string and fixed-point fields into the project's cents/`Decimal` aliases, with payload-based unit tests. The current database schema still needs a fractional-quantity migration before it can faithfully store all fixed-point contract counts.
-- Live PostgreSQL-backed polling was observed on 2026-07-16: the KXFED loop completed repeated 98-market passes without errors. The loop is continuous by design; stop it with `Ctrl+C` after collecting the desired observation window. Verify row counts and add a bounded `--once` mode before using it as a repeatable integration check.
+- `data/kalshi_client.py` normalizes current dollar-string and fixed-point fields into the project's cents/`Decimal` aliases, with payload-based unit tests. The database schema uses `NUMERIC(20, 4)` for fixed-point volume, open-interest, and trade-count values.
+- Live PostgreSQL-backed polling was observed on 2026-07-16: the KXFED loop completed repeated 98-market passes without errors. The loop is continuous by design; stop it with `Ctrl+C` after collecting the desired observation window. A bounded `--once` mode is available for repeatable integration checks.
 - Full-depth capture is implemented: the ingester calls Kalshi's batch orderbooks endpoint in batches of 100 and stores the lossless raw payload in `orderbook_snapshots.raw_book`. Use `python -m data.ingest --series-ticker KXFED --once` for a bounded pass, followed by `python -m data.verify_ingestion --series-ticker KXFED` to check stored coverage.
 - Full-depth persistence was verified on 2026-07-16: a bounded KXFED pass captured 98/98 raw books. At verification time the database contained 98 KXFED markets and 3,136 snapshots, including 98 full-depth raw-book snapshots.
 
@@ -17,10 +26,10 @@
 
 ## Why This Project
 
-This extends an existing project called "Social Stock Exchange" (a real-time news ingestion + LLM sentiment scoring pipeline for a prediction market startup). This new project reuses the sentiment-signal instinct but adds two things that project lacked:
+This extends an existing project called "Social Stock Exchange" (a real-time news ingestion + LLM sentiment scoring pipeline for a prediction market startup). This new project adds two things that project lacked:
 
-1. A rigorous, testable notion of "fair value" grounded in calibration rather than just directional sentiment.
-2. Actual market making mechanics (quoting, inventory risk, adverse selection).
+1. A reliable, full-depth prediction-market data pipeline for market microstructure analysis.
+2. Replayable market simulations for testing quoting, inventory risk, and adverse selection.
 
 **Target audience**: quant trading / quant developer recruiters, so code quality, clear metrics, and a believable "day 1 on a trading desk" framing matter more than sheer feature count.
 
@@ -30,23 +39,16 @@ This extends an existing project called "Social Stock Exchange" (a real-time new
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Data Ingestion  │────▶│  Fair Value Engine│────▶│  Quoting Engine │
-│  (REST + WS)     │     │  (calibration +   │     │  (spread, size, │
-│                  │     │   signal blending)│     │   inventory)    │
-└─────────────────┘     └──────────────────┘     └────────┬────────┘
+│  Data Ingestion  │────▶│ Replay / Market   │────▶│  Quoting Engine │
+│  (REST + batch   │     │ Microstructure    │     │  (spread, size, │
+│   order books)   │     │ Simulation        │     │   inventory)    │
+└────────┬────────┘     └────────┬─────────┘     └────────┬────────┘
         │                        │                         │
         ▼                        ▼                         ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Storage (TSDB/  │     │  Backtest Engine  │     │  Paper Trading  │
-│  Postgres)       │     │  (replay + P&L)   │     │  Executor       │
+│ PostgreSQL: raw  │     │ Fill / P&L / risk │     │ Optional paper  │
+│ books + metadata │     │ evaluation        │     │ trading         │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
-                                  │
-                                  ▼
-                        ┌──────────────────┐
-                        │  Calibration      │
-                        │  Dashboard        │
-                        │  (Brier, reliability)│
-                        └──────────────────┘
 ```
 
 **Recommended stack**: Python 3.11+, FastAPI for the internal service/dashboard API, Postgres (or TimescaleDB if available) for tick/quote/fill storage, Docker for packaging, deployable on AWS ECS. Use `httpx` for REST, `websockets` for streaming feeds. LangChain only if the news/sentiment signal module is included — do not force it into the core pricing/quoting code.
@@ -56,8 +58,8 @@ This extends an existing project called "Social Stock Exchange" (a real-time new
 ## Data Sources & APIs
 
 ### Kalshi (Primary)
-- **REST base URL**: `https://api.kalshi.com/trade-api/v2` (verify against `docs.kalshi.com` at implementation time — this URL has changed before)
-- **WebSocket**: `wss://api.kalshi.com/trade-api/ws/v2`
+- **REST base URL**: `https://external-api.kalshi.com/trade-api/v2`
+- **WebSocket**: `wss://external-api-ws.kalshi.com/trade-api/ws/v2`
 - **Demo/sandbox**: `https://demo-api.kalshi.co` (safe testing before using a funded account)
 - **Auth**: RSA-PSS signed requests using an API key ID + private key pair. **Public market data requires no auth at all** — use this for the data pipeline. Only add signed auth when wiring up real order placement.
 - **Useful endpoints**:
@@ -107,26 +109,25 @@ Three separate services:
 
 ---
 
-### Phase 2 — Fair Value / Calibration Model (Week 2)
-**Goal**: produce a "true" probability estimate for each open contract, distinct from the raw market mid-price.
+### Phase 2 — Replay Reader and Exchange Simulation (Week 2)
+**Goal**: turn stored full-depth snapshots into a deterministic, inspectable market replay for microstructure analysis and strategy evaluation.
 
-1. **Baseline fair value**: exponentially-weighted mid-price (a naive baseline to beat).
-2. **Calibration-aware model**: for markets in a recurring series, fit a model that maps observable features (time to resolution, current mid, order book imbalance, and optionally news sentiment) to a probability. Check calibration against realized outcomes using:
-   - **Reliability diagram**: bucket predicted probabilities into deciles, compare against realized frequency.
-   - **Brier score**: mean squared error between predicted probability and 0/1 outcome.
-3. **Optional signal enrichment** (reuse from Social Stock Exchange): pull relevant news for the event category, score sentiment/relevance with an LLM call, treat as one input feature. Label as an optional module — it can be demoed but must not block the core pipeline if an LLM API isn't available.
-4. Track and log calibration metrics over time in a dedicated `calibration_runs` table.
+1. Load `raw_book` snapshots in timestamp order for a market, preserving their original price and quantity precision.
+2. Reconstruct the visible book at each event and expose best bid/ask, spread, depth, imbalance, and time-to-resolution features.
+3. Model fills conservatively: a strategy order fills only when contemporaneous market activity plausibly crosses its price; do not assume fills simply because a quote appears inside the spread.
+4. Build deterministic tests against stored fixtures for book sequencing and fill behavior.
 
-**Deliverable**: a `FairValueModel` class with a `.predict(market_id) -> probability` method and a calibration report generator.
+**Deliverable**: replayable exchange simulations over the 3,100+ stored timestamped snapshots, with validated sequencing and fill assumptions.
 
 ---
 
 ### Phase 3 — Quoting Engine (Week 3)
-**Goal**: turn a fair value estimate into an actual two-sided quote with risk controls.
+**Goal**: evaluate inventory-aware Avellaneda--Stoikov-style market-making strategies using replayed market conditions.
 
-1. **Inventory-aware quoting**: given fair value `p`, current inventory, risk-aversion parameter, and time-to-resolution, compute bid/ask around `p` that widens as inventory grows. Implement the Avellaneda-Stoikov adaptation for binary probability space (see Math Reference below). Reference explicitly in code comments/README.
-2. **Adverse-selection guard**: if order flow imbalance or a sudden price move suggests informed flow, widen the quote or pull it temporarily.
-3. **Hard risk limits**:
+1. Start with market mid-price as the baseline fair value; calibration-aware fair value can be added later as a pluggable input.
+2. **Inventory-aware quoting**: given fair value `p`, current inventory, risk-aversion parameter, and time-to-resolution, compute bid/ask around the reservation price. Implement the Avellaneda--Stoikov adaptation for binary probability space (see Math Reference below).
+3. **Adverse-selection guard**: if order flow imbalance or a sudden price move suggests informed flow, widen the quote or pull it temporarily.
+4. **Hard risk limits**:
    - Max position size per market
    - Max aggregate exposure across correlated markets (e.g. don't be long "Fed cuts in March" and long "Fed cuts in March by 50bp" without correlation accounting)
    - Kill switch
@@ -136,19 +137,25 @@ Three separate services:
 ---
 
 ### Phase 4 — Backtest + Paper Trading Harness (Week 4)
-**Goal**: prove the strategy works against historical data; optionally run it live safely.
+**Goal**: compare inventory-aware quoting against simple baselines under realistic historical conditions.
 
 1. **Event-driven backtester**: replay stored order book history tick-by-tick. Conservative fill assumption — only get filled if a real trade crossed your price, not just because the quote was inside the spread. Compute: P&L, Sharpe-like ratio, max drawdown, inventory over time, fill rate.
 2. **Baseline comparisons**:
    - (a) Naive symmetric market maker (no calibration model)
    - (b) "Just take the mid, never quote" no-strategy control
-3. **Optional live paper mode**: run on Kalshi's demo environment against live markets without financial risk, logging live calibration and fill behavior over a week or two.
+3. Report book-level diagnostics such as spread, depth, imbalance, and strategy behavior around market moves.
 
-**Deliverable**: a backtest report (markdown or notebook) with P&L curve, calibration reliability diagram, Brier score over time, and a clear strategy-vs-baseline comparison chart.
+**Deliverable**: a concise backtest report documenting simulation assumptions, market-microstructure findings, and strategy-versus-baseline results.
 
 ---
 
-### Phase 5 — Dashboard + Polish (Week 5, recommended for interviews)
+### Optional Extension — Fair Value / Calibration Model
+
+Add a calibrated probability model, Brier-score reporting, and reliability diagrams only after the data → replay → quote → evaluate path works end to end. This is an enrichment, not a prerequisite for the core portfolio artifact.
+
+---
+
+### Phase 5 — Dashboard + Polish (optional)
 1. Small FastAPI + simple frontend (or Streamlit) showing:
    - Live/backtested fair value vs. market price per tracked market
    - Current inventory and P&L
@@ -191,19 +198,21 @@ Quote symmetric spread around `r`, **not** around `p`, so inventory naturally ge
 
 | Week | Focus | Key Deliverable |
 |------|-------|-----------------|
-| 1 | Kalshi data pipeline (REST + WS), Postgres schema, historical backfill | Replay script for any stored market |
-| 2 | Fair value model + calibration metrics (Brier, reliability diagrams) | `FairValueModel` class + calibration report |
-| 3 | Quoting engine: inventory-aware spread + adverse selection guard | `QuotingEngine` with unit-tested risk limits |
-| 4 | Backtest harness, P&L + calibration report, baseline comparisons | Backtest report with strategy-vs-baseline charts |
-| 5 | Dashboard, README with math, Docker packaging, optional live paper-trading | Deployable artifact; portfolio-ready README |
+| 1 | Kalshi full-depth data pipeline, Postgres schema, historical backfill | Verified multi-market full-depth capture |
+| 2 | Timestamp-ordered replay reader and conservative exchange simulation | Replay script for stored market snapshots |
+| 3 | Inventory-aware quoting and risk controls | `QuotingEngine` with unit-tested risk limits |
+| 4 | Backtest and market-microstructure analysis | Strategy-versus-baseline simulation report |
+| Optional | Calibration, dashboard, Docker packaging, paper mode | Enrichment, not a dependency for the core portfolio artifact |
 
 ---
 
-## Target Resume Bullet
+## Target Resume Bullets
 
-> "Built a calibrated market making system for Kalshi prediction markets, combining a probability calibration model (Brier score, reliability diagrams) with Avellaneda-Stoikov-style inventory-aware quoting; backtested against N resolved markets, outperforming a naive symmetric market maker baseline by X% in risk-adjusted P&L."
+> Built a Python/PostgreSQL market data pipeline collecting and normalizing full-depth binary prediction market order books across 98 Kalshi Fed-rate markets for market microstructure analysis.
 
-*(Adjust N and X to actual results once built.)*
+> Developed replayable exchange simulations from 3,100+ timestamped order-book snapshots to evaluate inventory-aware Avellaneda--Stoikov market-making strategies under realistic market conditions.
+
+Use only metrics and capabilities verified in the repository; add strategy-performance claims only after the conservative simulator produces reproducible evidence.
 
 ---
 
@@ -212,8 +221,8 @@ Quote symmetric spread around `r`, **not** around `p`, so inventory naturally ge
 | Anti-pattern | Why |
 |---|---|
 | Building a generic limit order book matching engine from scratch | Use the real Kalshi/Polymarket order book data instead of simulating a synthetic one |
-| Making the LLM sentiment signal the headline | It's one input feature. The calibration rigor is the headline. |
-| Framing this as low-latency / HFT | Kalshi's rate limits make sub-second HFT impractical; reviewers will notice the mismatch. Frame as medium-frequency, calibration-driven market making. |
+| Making the LLM sentiment signal or calibration model the headline | They are optional inputs; reliable full-depth capture and replayable simulation are the headline. |
+| Framing this as low-latency / HFT | Kalshi's rate limits make sub-second HFT impractical; reviewers will notice the mismatch. Frame as medium-frequency market-data and simulation research. |
 
 ---
 
