@@ -31,7 +31,8 @@ The project is intended to support these claims once each is backed by implement
 | `db/db.py` | Database connection and schema initialization helpers. |
 | `models/` | Optional calibration metrics and fair-value models. |
 | `quoting/` | Inventory-aware quote generation and risk-limit logic. |
-| `backtest/` | Target location for timestamp-ordered replay, conservative fill simulation, and P&L/risk evaluation. |
+| `backtest/replay.py` | Typed, timestamp-ordered, server-side streamed order-book replay and microstructure-feature derivation. |
+| `backtest/engine.py` | Existing backtest scaffold; conservative exchange/fill simulation remains Milestone 3 work. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
 | `.spec/STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
@@ -139,6 +140,21 @@ Ingestion coverage (KXFED): 98 markets, 294 snapshots, 294 validated full books 
 
 This confirms multiple valid full-depth snapshots per tracked market and completes the live data-capture acceptance criteria for Milestone 1. It does not yet support a claim of 3,100+ full-depth snapshots; that requires a longer verified capture.
 
+### Live Milestone 2 Replay Verification (2026-07-29 UTC)
+
+`backtest.replay` now provides a typed replay interface that decodes current and legacy raw books, preserves `Decimal` quantities, derives top-of-book/mid/spread/depth/imbalance features, and marks missing depth, empty books, one-sided books, crossed books, duplicate timestamps, and optional staleness explicitly. Rows are streamed from Postgres with a named cursor in stable `(ts, id)` order.
+
+Read-only smoke test:
+
+```text
+python -m backtest.replay KXFED-27APR-T4.25 --limit 5 --max-gap-seconds 15
+2026-07-29T04:46:26.699149+00:00 id=1 source=full_depth status=two_sided mid=0.215
+2026-07-29T04:46:37.224306+00:00 id=99 source=full_depth status=two_sided mid=0.215
+2026-07-29T04:46:47.734383+00:00 id=197 source=full_depth status=two_sided mid=0.215
+```
+
+The full test suite passed with **36 tests**. Conservative exchange/fill simulation is the next milestone.
+
 ## Next Integration Steps
 
 The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
@@ -146,10 +162,9 @@ The authoritative completion plan, acceptance criteria, and evidence checklist a
 1. Apply the schema migration to the existing local database, then run a controlled full-depth capture (for example, `--interval 10 --passes 30`) and verify database coverage.
 2. Save the resulting coverage output and capture metadata as Milestone 1 evidence.
 3. Verify historical backfill against the normalized trade fields, collecting resolved KXFED contracts and trades.
-4. Build a deterministic replay reader that loads `raw_book` snapshots in timestamp order and exposes book-level microstructure features.
-5. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
-6. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
-7. Only then consider a WebSocket ingestion path.
+4. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
+5. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
+6. Only then consider a WebSocket ingestion path.
 
 ## Safe Test Commands
 
@@ -180,6 +195,12 @@ For a bounded multi-pass capture window:
 ```powershell
 python -m data.ingest --series-ticker KXFED --interval 10 --passes 30 --verbose
 python -m data.verify_ingestion --series-ticker KXFED
+```
+
+For a read-only replay smoke test of one captured market:
+
+```powershell
+python -m backtest.replay KXFED-27APR-T4.25 --limit 5 --max-gap-seconds 15
 ```
 
 Do not commit `.env`; it may contain credentials.

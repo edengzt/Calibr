@@ -53,7 +53,8 @@ python -m data.verify_ingestion --series-ticker KXFED
 - `data/verify_ingestion.py` — database coverage report.
 - `models/` — calibration metrics and fair-value models.
 - `quoting/` — inventory-aware quote and risk logic.
-- `backtest/` — event-driven replay and fill simulation.
+- `backtest/replay.py` — deterministic full-depth replay and microstructure features.
+- `backtest/engine.py` — event-driven backtest scaffold; fill simulation is the next milestone.
 - `.spec/` — durable project and agent context.
 
 ## Roadmap

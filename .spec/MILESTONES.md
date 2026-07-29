@@ -43,6 +43,8 @@ Evidence to retain:
 
 ## Milestone 2 — Build Deterministic Order-Book Replay
 
+**Status:** Complete on 2026-07-29 UTC. The replay reader streams Postgres snapshots by `(ts, id)`, explicitly labels top-of-book-only rows, and was smoke-tested against captured KXFED full-depth data.
+
 **Goal:** load stored snapshots in chronological order and present the state needed for market-microstructure analysis.
 
 Tasks:
