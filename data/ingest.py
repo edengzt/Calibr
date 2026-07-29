@@ -8,6 +8,7 @@ Usage (from repo root):
     python -m data.ingest --series-ticker KXFED      # filter to one series
     python -m data.ingest --status open --interval 5  # faster polling
     python -m data.ingest --series-ticker KXFED --once  # one verified pass
+    python -m data.ingest --series-ticker KXFED --passes 30  # bounded capture window
 
 What it does on each pass:
   1. Fetch all markets matching filters from Kalshi's REST API.
@@ -21,9 +22,11 @@ from __future__ import annotations
 import argparse
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from itertools import islice
+from typing import Any
 
-from data.kalshi_client import KalshiClient
+from data.kalshi_client import KalshiClient, dollars_to_cents, fixed_point_to_decimal
 from db.db import get_conn
 from psycopg.types.json import Json
 
@@ -134,17 +137,79 @@ def _batches(items: list[str], size: int = 100):
         yield batch
 
 
+def validate_raw_book(raw_book: object) -> dict[str, Any]:
+    """Validate a lossless Kalshi book payload before persisting it for replay.
+
+    A raw book is replayable only when it contains at least one recognized
+    side and every level can be parsed as a price/quantity pair.  One-sided
+    books are valid: an empty or absent opposing side is normal in thin
+    markets.  An empty object, malformed level, or sub-cent price is not
+    counted as a full-depth capture.
+    """
+    if not isinstance(raw_book, dict):
+        raise ValueError("orderbook payload must be an object")
+
+    formats = (
+        (("yes_dollars", "no_dollars"), True),
+        (("yes", "no"), False),
+    )
+    matching_formats = [format_spec for format_spec in formats if any(
+        side in raw_book for side in format_spec[0]
+    )]
+    if not matching_formats:
+        raise ValueError("orderbook payload has no recognized YES/NO sides")
+    if len(matching_formats) > 1:
+        raise ValueError("orderbook payload mixes current and legacy side formats")
+
+    sides, dollar_prices = matching_formats[0]
+    for side in sides:
+        levels = raw_book.get(side, [])
+        if not isinstance(levels, list):
+            raise ValueError(f"orderbook side {side!r} must be a list")
+        for index, level in enumerate(levels):
+            if not isinstance(level, (list, tuple)) or len(level) != 2:
+                raise ValueError(f"orderbook side {side!r} level {index} must be [price, count]")
+            price, count = level
+            if dollar_prices:
+                if dollars_to_cents(price) is None:
+                    raise ValueError(f"orderbook side {side!r} level {index} has no price")
+            else:
+                try:
+                    cents = Decimal(str(price))
+                except (InvalidOperation, ValueError) as exc:
+                    raise ValueError(f"invalid legacy cent price: {price!r}") from exc
+                if cents != cents.to_integral_value() or not Decimal("0") <= cents <= Decimal("100"):
+                    raise ValueError(f"invalid legacy cent price: {price!r}")
+            if fixed_point_to_decimal(count) is None:
+                raise ValueError(f"orderbook side {side!r} level {index} has no quantity")
+
+    return raw_book
+
+
 def fetch_full_orderbooks(client: KalshiClient, markets: list[dict]) -> dict[str, dict]:
-    """Fetch full-depth raw books for every listed market in API-safe batches."""
+    """Fetch and validate full-depth raw books for every listed market.
+
+    A pass fails before any database writes if Kalshi omits a requested ticker
+    or returns a malformed payload. This prevents a partial batch response
+    from being reported as a successful full-depth capture.
+    """
     tickers = [m["ticker"] for m in markets if m.get("ticker")]
     books: dict[str, dict] = {}
     for ticker_batch in _batches(tickers):
-        books.update(client.get_orderbooks(ticker_batch))
+        response_books = client.get_orderbooks(ticker_batch)
+        missing = set(ticker_batch) - response_books.keys()
+        if missing:
+            raise RuntimeError(
+                "Kalshi batch orderbooks response omitted requested tickers: "
+                + ", ".join(sorted(missing))
+            )
+        for ticker in ticker_batch:
+            books[ticker] = validate_raw_book(response_books[ticker])
     return books
 
 
 def run(series_ticker: str | None, status: str | None, interval_seconds: int,
-        verbose: bool = False, once: bool = False) -> None:
+        verbose: bool = False, once: bool = False, max_passes: int | None = None) -> None:
     print(f"Starting ingestion loop (interval={interval_seconds}s, "
           f"series={series_ticker or 'all'}, status={status or 'all'})")
 
@@ -191,7 +256,7 @@ def run(series_ticker: str | None, status: str | None, interval_seconds: int,
                 print(f"[ERROR] pass #{pass_num} failed: {exc}")
                 # Don't crash the loop; next pass will retry
 
-            if once:
+            if once or (max_passes is not None and pass_num >= max_passes):
                 return
             time.sleep(interval_seconds)
 
@@ -217,10 +282,24 @@ if __name__ == "__main__":
         "--verbose", action="store_true",
         help="Print each market on every pass",
     )
-    parser.add_argument(
+    bounded_group = parser.add_mutually_exclusive_group()
+    bounded_group.add_argument(
         "--once", action="store_true",
         help="Run exactly one ingestion pass, then exit",
     )
+    bounded_group.add_argument(
+        "--passes", type=int, default=None,
+        help="Run this many ingestion passes, then exit (must be positive)",
+    )
     args = parser.parse_args()
+    if args.passes is not None and args.passes <= 0:
+        parser.error("--passes must be a positive integer")
     status_arg = args.status if args.status else None
-    run(args.series_ticker, status_arg, args.interval, verbose=args.verbose, once=args.once)
+    run(
+        args.series_ticker,
+        status_arg,
+        args.interval,
+        verbose=args.verbose,
+        once=args.once,
+        max_passes=args.passes,
+    )

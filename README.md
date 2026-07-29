@@ -29,14 +29,21 @@ docker compose up -d postgres
 python -m db.db
 ```
 
-Run one bounded, full-depth ingestion pass and inspect coverage:
+Run one bounded, full-depth ingestion pass and inspect validated coverage:
 
 ```powershell
 python -m data.ingest --series-ticker KXFED --once --verbose
 python -m data.verify_ingestion --series-ticker KXFED
 ```
 
-For continuous polling, omit `--once`; stop the loop with `Ctrl+C`.
+For continuous polling, omit `--once`; stop the loop with `Ctrl+C`. The coverage command reports valid full-book payloads, invalid raw payloads, and the number of tracked markets still missing a valid full book.
+
+For a reproducible multi-pass capture window, use `--passes` rather than stopping manually. This example collects 30 passes at 10-second intervals, then exits:
+
+```powershell
+python -m data.ingest --series-ticker KXFED --interval 10 --passes 30 --verbose
+python -m data.verify_ingestion --series-ticker KXFED
+```
 
 ## Key paths
 
@@ -57,4 +64,4 @@ For continuous polling, omit `--once`; stop the loop with `Ctrl+C`.
 4. Train a calibrated fair-value model and compare it with the market mid.
 5. Backtest inventory-aware quotes against conservative fill assumptions.
 
-See [STEERING.md](STEERING.md) for the design and [.spec/PROJECT_CONTEXT.md](.spec/PROJECT_CONTEXT.md) for current implementation status.
+See [.spec/STEERING.md](.spec/STEERING.md) for the design and [.spec/PROJECT_CONTEXT.md](.spec/PROJECT_CONTEXT.md) for current implementation status.

@@ -8,6 +8,7 @@ Keep these files current when changing architecture, external API integrations, 
 
 - [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md): project goal, code map, current status, integration findings, and next steps.
 - [`MILESTONES.md`](MILESTONES.md): ordered completion plan, acceptance criteria, and evidence required for the final portfolio claims.
+- [`STEERING.md`](STEERING.md): product direction, architecture, scope boundaries, and phased roadmap.
 
 ## Maintenance Rule
 

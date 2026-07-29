@@ -10,10 +10,13 @@ This document defines the remaining work required to finish Calibr as a portfoli
 - A verified KXFED capture contains 98 markets and 3,136 timestamped snapshots; 98 of those snapshots contain lossless `raw_book` full-depth payloads.
 - Quoting and risk components exist with unit tests.
 - A timestamp-ordered replay reader, conservative fill simulator, and end-to-end strategy evaluation have not yet been verified.
+- Batch-response and raw-book validation are implemented, including a bounded `--passes N` capture mode. Live verification on 2026-07-29 UTC captured 294 validated full books across all 98 KXFED markets, with zero missing markets and zero invalid payloads.
 
 Do not describe all 3,100+ existing snapshots as full depth unless a new capture verifies that fact. The current evidence supports 3,100+ timestamped snapshots and 98 verified full-depth snapshots.
 
 ## Milestone 1 — Make Data Capture Reproducible
+
+**Status:** Complete on 2026-07-29 UTC. The verified KXFED run captured 294 valid full-depth snapshots across all 98 markets, with zero missing markets and zero invalid raw payloads.
 
 **Goal:** reliably collect and validate full-depth order-book data for the 98-market KXFED universe.
 
@@ -21,7 +24,7 @@ Tasks:
 
 1. Confirm the local schema migration is applied and fresh ingestion preserves `raw_book` JSONB payloads.
 2. Run bounded `--once` ingestion and `verify_ingestion` checks in a clean/reproducible environment.
-3. Run a controlled polling window long enough to collect multiple full-depth snapshots per market.
+3. Run a controlled polling window with `--passes` long enough to collect multiple full-depth snapshots per market.
 4. Record capture metadata: series ticker, market count, timestamp range, snapshot count, full-book count, and polling interval.
 5. Add or extend tests for malformed/empty books, batch boundaries, and normalized fixed-point quantities.
 
@@ -155,4 +158,3 @@ Calibr is complete for its core portfolio goal when all of the following are tru
 3. A deterministic, conservative simulator explains every simulated fill and reconciles inventory/P&L.
 4. Inventory-aware quotes and risk limits run end to end against replayed data.
 5. A reproducible report compares the strategy with baselines and states all assumptions and data limitations.
-

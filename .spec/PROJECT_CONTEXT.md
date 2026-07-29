@@ -1,6 +1,6 @@
 # Calibr — Project Context
 
-Last updated: 2026-07-16
+Last updated: 2026-07-27
 
 ## Project Name
 
@@ -33,7 +33,7 @@ The project is intended to support these claims once each is backed by implement
 | `quoting/` | Inventory-aware quote generation and risk-limit logic. |
 | `backtest/` | Target location for timestamp-ordered replay, conservative fill simulation, and P&L/risk evaluation. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
-| `STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
+| `.spec/STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
 ## Version Control
 
@@ -123,16 +123,33 @@ python -m data.verify_ingestion --series-ticker KXFED
 
 Result: the one-pass ingester reported **98/98 full books captured**. Database coverage reported **98 markets**, **3,136 snapshots**, and **98 full-book snapshots**, spanning `2026-07-16 08:27:44Z` through `08:44:57Z`. The earlier 3,038 snapshots came from the initial top-of-book-only polling run; the 98 newest snapshots contain `raw_book` full depth.
 
+### Capture Validation Hardening (2026-07-27)
+
+The ingester now validates every batch response before it writes any snapshots: all requested tickers must be returned, and every persisted raw book must have a recognized YES/NO representation with parseable price/quantity levels. `data.verify_ingestion` now distinguishes valid full books from malformed raw payloads and reports market-level full-book coverage.
+
+`data.ingest` supports `--passes N` for reproducible bounded capture windows; use it with `--interval` instead of relying on a manual `Ctrl+C` stop. Unit tests cover malformed/empty payloads, omitted tickers, legacy/current book formats, and coverage classification. A live Postgres/Kalshi verification of these changes remains required.
+
+### Live Milestone 1 Verification (2026-07-29 UTC)
+
+After applying the schema with Python 3.12 in a project virtual environment, a KXFED capture was verified with:
+
+```text
+Ingestion coverage (KXFED): 98 markets, 294 snapshots, 294 validated full books across 98 markets (0 markets missing full books, 0 invalid raw payloads); range=2026-07-29 04:46:26.699149+00:00 to 2026-07-29 04:46:47.807573+00:00
+```
+
+This confirms multiple valid full-depth snapshots per tracked market and completes the live data-capture acceptance criteria for Milestone 1. It does not yet support a claim of 3,100+ full-depth snapshots; that requires a longer verified capture.
+
 ## Next Integration Steps
 
 The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
 
-1. Apply the schema migration to the existing local database, then run one full-depth `--once` pass and verify database coverage.
-2. Verify historical backfill against the normalized trade fields, collecting resolved KXFED contracts and trades.
-3. Build a deterministic replay reader that loads `raw_book` snapshots in timestamp order and exposes book-level microstructure features.
-4. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
-5. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
-6. Only then consider a WebSocket ingestion path.
+1. Apply the schema migration to the existing local database, then run a controlled full-depth capture (for example, `--interval 10 --passes 30`) and verify database coverage.
+2. Save the resulting coverage output and capture metadata as Milestone 1 evidence.
+3. Verify historical backfill against the normalized trade fields, collecting resolved KXFED contracts and trades.
+4. Build a deterministic replay reader that loads `raw_book` snapshots in timestamp order and exposes book-level microstructure features.
+5. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
+6. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
+7. Only then consider a WebSocket ingestion path.
 
 ## Safe Test Commands
 
@@ -155,6 +172,13 @@ For a bounded, full-depth validation pass after applying the schema migration:
 ```powershell
 python -m db.db
 python -m data.ingest --series-ticker KXFED --once --verbose
+python -m data.verify_ingestion --series-ticker KXFED
+```
+
+For a bounded multi-pass capture window:
+
+```powershell
+python -m data.ingest --series-ticker KXFED --interval 10 --passes 30 --verbose
 python -m data.verify_ingestion --series-ticker KXFED
 ```
 

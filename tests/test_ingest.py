@@ -1,7 +1,10 @@
 """Unit tests for batched full-orderbook capture and bounded ingestion helpers."""
 from psycopg.types.json import Json
 
-from data.ingest import _batches, fetch_full_orderbooks, insert_snapshot
+import pytest
+
+from data.ingest import _batches, fetch_full_orderbooks, insert_snapshot, run, validate_raw_book
+from data.verify_ingestion import summarize_raw_book_rows
 
 
 def test_batches_respect_kalshi_batch_limit():
@@ -30,6 +33,88 @@ def test_fetch_full_orderbooks_combines_all_batches():
     assert [len(call) for call in client.calls] == [100, 1]
     assert len(books) == 101
     assert books["KX-100"]["yes_dollars"][0][0] == "0.42"
+
+
+def test_fetch_full_orderbooks_rejects_missing_ticker_from_batch_response():
+    class FakeClient:
+        def get_orderbooks(self, _tickers):
+            return {"KX-A": {"yes_dollars": []}}
+
+    with pytest.raises(RuntimeError, match="omitted requested tickers: KX-B"):
+        fetch_full_orderbooks(FakeClient(), [{"ticker": "KX-A"}, {"ticker": "KX-B"}])
+
+
+@pytest.mark.parametrize(
+    "raw_book",
+    [
+        {},
+        {"yes_dollars": "not-a-list"},
+        {"yes_dollars": [["0.425", "1"]]},
+        {"yes_dollars": [["0.42"]]},
+        {"yes_dollars": [["0.42", "not-a-number"]]},
+        {"yes_dollars": [[None, "1"]]},
+        {"yes_dollars": [["0.42", None]]},
+        {"yes_dollars": [], "yes": []},
+    ],
+)
+def test_validate_raw_book_rejects_empty_and_malformed_payloads(raw_book):
+    with pytest.raises(ValueError):
+        validate_raw_book(raw_book)
+
+
+def test_validate_raw_book_accepts_one_sided_and_empty_depth():
+    raw_book = {"yes_dollars": [], "no_dollars": [["0.58", "10.50"]]}
+
+    assert validate_raw_book(raw_book) == raw_book
+
+
+def test_validate_raw_book_accepts_legacy_integer_cent_levels():
+    raw_book = {"yes": [[42, "10.50"]], "no": [["58.0", 3]]}
+
+    assert validate_raw_book(raw_book) == raw_book
+
+
+def test_raw_book_coverage_summary_only_counts_decodable_payloads():
+    result = summarize_raw_book_rows(
+        [
+            {"ticker": "KX-A", "raw_book": {"yes_dollars": [["0.42", "1"]]}},
+            {"ticker": "KX-A", "raw_book": {"no_dollars": [["0.58", "2"]]}},
+            {"ticker": "KX-B", "raw_book": {}},
+        ],
+        markets=3,
+    )
+
+    assert result == {
+        "raw_book_snapshots": 3,
+        "full_book_snapshots": 2,
+        "invalid_raw_book_snapshots": 1,
+        "markets_with_full_books": 1,
+        "markets_missing_full_books": 2,
+    }
+
+
+def test_bounded_run_stops_after_requested_number_of_passes(monkeypatch):
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def iter_markets(self, **_kwargs):
+            return iter([])
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+    monkeypatch.setattr("data.ingest.KalshiClient", lambda use_demo: FakeClient())
+    monkeypatch.setattr("data.ingest.get_conn", lambda: FakeConn())
+
+    run(None, "open", interval_seconds=0, max_passes=2)
 
 
 def test_insert_snapshot_wraps_full_book_as_jsonb():
