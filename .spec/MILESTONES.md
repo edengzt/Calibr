@@ -69,7 +69,7 @@ Evidence to retain:
 
 ## Milestone 3 — Implement a Conservative Exchange Simulator
 
-**Status:** Implementation complete on 2026-08-01. The event loop merges replay snapshots, stored trades, and deterministic orders; it produces auditable traces, marks, fills, expiry/cancel state, and risk rejections. Fixture tests verify fill behavior, while a live fill trace remains pending because the local database currently contains no stored trades.
+**Status:** Implementation complete on 2026-08-01. The event loop merges replay snapshots, stored trades, and deterministic orders; it produces auditable traces, marks, fills, expiry/cancel state, and risk rejections. Fixture tests verify fill behavior. Historical backfill now supplies 373 trades, but a live fill trace remains pending because none overlap a full-depth snapshot ticker/time range.
 
 **Goal:** evaluate hypothetical limit quotes without optimistic fill assumptions.
 

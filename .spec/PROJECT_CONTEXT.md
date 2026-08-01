@@ -166,13 +166,25 @@ The trades schema and historical backfill now preserve Kalshi's canonical `taker
 
 The additive schema migration was applied successfully on 2026-08-01. A live simulator smoke test over `KXFED-27APR-T4.25` produced deterministic submit/snapshot/mark trace entries, but the local `trades` table contains **0 rows**, so no live fill could be observed. Fixture integration tests cover strict-cross fills, shared participation caps, at-touch/unknown-direction rejections, expiry, settlement, and risk rejections. Historical trade backfill is required before a live fill trace can be generated.
 
+### Historical Trade Backfill Verification (2026-08-01)
+
+The bounded command below completed successfully and stored **373 trades** across five settled KXFED markets:
+
+```text
+python -m data.backfill --series-ticker KXFED --limit 5 --sleep-ms 0
+```
+
+Every stored row contains both the legacy `taker_side` and the canonical `taker_outcome_side` direction field. The simulator trade adapter streamed and decoded all 160 trades for `KXFED-26JUN-T4.25`, mapping 130 to `BUY_YES` and 30 to `SELL_YES` aggression.
+
+There are currently **zero tickers with both full-depth snapshots and stored trades**. The historical trades belong to settled June markets, while the captured full-depth books belong to later open markets. This validates the trade-ingestion and direction-adapter boundary, but it does not yet validate a live replay → trade evidence → fill sequence. To do that, extend live ingestion to store trades concurrently with full-depth snapshots for the same open ticker/time window.
+
 ## Next Integration Steps
 
 The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
 
 1. Apply the schema migration to the existing local database, then run a controlled full-depth capture (for example, `--interval 10 --passes 30`) and verify database coverage.
 2. Save the resulting coverage output and capture metadata as Milestone 1 evidence.
-3. Backfill and verify historical KXFED trades, including canonical trade-direction fields, so the simulator can produce a live fill trace.
+3. Extend live ingestion to persist trades concurrently with full-depth snapshots for the same open KXFED tickers; then verify timestamp/ticker overlap and a live simulator fill trace.
 4. Integrate the quoting engine with `backtest.simulation` and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
 5. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
 6. Only then consider a WebSocket ingestion path.
