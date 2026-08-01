@@ -10,6 +10,7 @@ from backtest.simulator import (
     MarketTrade,
     OrderSide,
     OrderStatus,
+    RiskLimits,
     SimulatedFill,
     SimulatedOrder,
     SimulatorState,
@@ -187,3 +188,11 @@ def test_expired_order_never_accepts_a_policy_fill():
 
     assert decision.approved is False
     assert decision.reason == "order_expired"
+
+
+def test_state_rejects_fill_that_breaches_explicit_risk_limit():
+    state = SimulatorState(risk_limits=RiskLimits(Decimal("2"), Decimal("3")))
+    state.submit(make_order(quantity=Decimal("3")))
+
+    with pytest.raises(ValueError, match="risk limits"):
+        state.record_fill(make_fill(quantity=Decimal("2.5")))

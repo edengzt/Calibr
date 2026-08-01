@@ -1,6 +1,6 @@
 # Calibr — Project Context
 
-Last updated: 2026-07-27
+Last updated: 2026-08-01
 
 ## Project Name
 
@@ -34,7 +34,8 @@ The project is intended to support these claims once each is backed by implement
 | `backtest/replay.py` | Typed, timestamp-ordered, server-side streamed order-book replay and microstructure-feature derivation. |
 | `backtest/simulator.py` | Typed order/fill lifecycle, documented conservative trade-evidence fill policy, and exact-quantity pre-/post-fee accounting primitives. |
 | `backtest/FILL_MODEL.md` | Fill assumptions, queue-position limitations, lifecycle rules, and fee treatment. |
-| `backtest/engine.py` | Existing backtest scaffold; event orchestration remains Milestone 3 work. |
+| `backtest/simulation.py` | Event loop merging snapshot replay, stored trade evidence, deterministic orders, risk checks, and an auditable trace. |
+| `backtest/engine.py` | Legacy backtest scaffold; migrate it to the simulator path during Milestone 4. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
 | `.spec/STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
@@ -157,14 +158,22 @@ python -m backtest.replay KXFED-27APR-T4.25 --limit 5 --max-gap-seconds 15
 
 The full test suite passed with **36 tests**. Conservative exchange/fill simulation is the next milestone.
 
+### Milestone 3 Simulator Integration (2026-08-01)
+
+The conservative simulator implementation is complete and the full suite passed with **50 tests**. It includes typed orders/fills/ledgers; configurable, trade-evidence-based fills; lifecycle transitions; optional fees; explicit risk limits; and `backtest.simulation`, an event loop that merges replay snapshots, trade evidence, and timestamped orders into an auditable trace.
+
+The trades schema and historical backfill now preserve Kalshi's canonical `taker_outcome_side` and `taker_book_side` fields, with legacy `taker_side` retained for compatibility. The adapter maps `yes`/`bid` to YES-buy aggression and `no`/`ask` to YES-sell aggression, following [Kalshi's order-direction reference](https://docs.kalshi.com/getting_started/order_direction).
+
+The additive schema migration was applied successfully on 2026-08-01. A live simulator smoke test over `KXFED-27APR-T4.25` produced deterministic submit/snapshot/mark trace entries, but the local `trades` table contains **0 rows**, so no live fill could be observed. Fixture integration tests cover strict-cross fills, shared participation caps, at-touch/unknown-direction rejections, expiry, settlement, and risk rejections. Historical trade backfill is required before a live fill trace can be generated.
+
 ## Next Integration Steps
 
 The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
 
 1. Apply the schema migration to the existing local database, then run a controlled full-depth capture (for example, `--interval 10 --passes 30`) and verify database coverage.
 2. Save the resulting coverage output and capture metadata as Milestone 1 evidence.
-3. Verify historical backfill against the normalized trade fields, collecting resolved KXFED contracts and trades.
-4. Implement conservative exchange/fill simulation and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
+3. Backfill and verify historical KXFED trades, including canonical trade-direction fields, so the simulator can produce a live fill trace.
+4. Integrate the quoting engine with `backtest.simulation` and evaluate inventory-aware Avellaneda--Stoikov quotes against naïve baselines.
 5. Add the naïve mid-price fair-value baseline and calibration reporting as optional enhancements.
 6. Only then consider a WebSocket ingestion path.
 
@@ -203,6 +212,12 @@ For a read-only replay smoke test of one captured market:
 
 ```powershell
 python -m backtest.replay KXFED-27APR-T4.25 --limit 5 --max-gap-seconds 15
+```
+
+For a one-order simulator trace (zero fills are expected until trade backfill is populated):
+
+```powershell
+python -m backtest.simulation KXFED-27APR-T4.25 --side buy_yes --price 21 --quantity 5 --limit 12
 ```
 
 Do not commit `.env`; it may contain credentials.

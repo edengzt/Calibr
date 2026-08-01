@@ -54,7 +54,9 @@ python -m data.verify_ingestion --series-ticker KXFED
 - `models/` — calibration metrics and fair-value models.
 - `quoting/` — inventory-aware quote and risk logic.
 - `backtest/replay.py` — deterministic full-depth replay and microstructure features.
-- `backtest/engine.py` — event-driven backtest scaffold; fill simulation is the next milestone.
+- `backtest/simulator.py` — conservative order/fill lifecycle and accounting primitives.
+- `backtest/simulation.py` — event-driven replay/trade/order integration with an auditable trace.
+- `backtest/engine.py` — legacy backtest scaffold to migrate onto the simulator path.
 - `.spec/` — durable project and agent context.
 
 ## Roadmap

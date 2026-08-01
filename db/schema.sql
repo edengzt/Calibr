@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS trades (
     ts                  TIMESTAMPTZ NOT NULL,
     price               SMALLINT,   -- cents
     count               NUMERIC(20, 4),
-    taker_side          TEXT        -- 'yes' or 'no'
+    taker_side          TEXT,       -- legacy 'yes' or 'no'
+    taker_outcome_side  TEXT,       -- canonical current API direction: 'yes' or 'no'
+    taker_book_side     TEXT        -- canonical current API direction: 'bid' or 'ask'
 );
 CREATE INDEX IF NOT EXISTS idx_trades_ticker_ts ON trades (ticker, ts);
 CREATE INDEX IF NOT EXISTS idx_trades_trade_id  ON trades (trade_id);
@@ -92,3 +94,6 @@ ALTER TABLE orderbook_snapshots
     ALTER COLUMN open_interest TYPE NUMERIC(20, 4) USING open_interest::NUMERIC;
 ALTER TABLE trades
     ALTER COLUMN count TYPE NUMERIC(20, 4) USING count::NUMERIC;
+ALTER TABLE trades
+    ADD COLUMN IF NOT EXISTS taker_outcome_side TEXT,
+    ADD COLUMN IF NOT EXISTS taker_book_side TEXT;

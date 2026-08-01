@@ -88,8 +88,14 @@ def insert_trades(conn, ticker: str, trades: list[dict]) -> int:
             continue
         conn.execute(
             """
-            INSERT INTO trades (trade_id, ticker, ts, price, count, taker_side)
-            VALUES (%(trade_id)s, %(ticker)s, %(ts)s, %(price)s, %(count)s, %(taker_side)s)
+            INSERT INTO trades (
+                trade_id, ticker, ts, price, count, taker_side,
+                taker_outcome_side, taker_book_side
+            )
+            VALUES (
+                %(trade_id)s, %(ticker)s, %(ts)s, %(price)s, %(count)s, %(taker_side)s,
+                %(taker_outcome_side)s, %(taker_book_side)s
+            )
             ON CONFLICT (trade_id) DO NOTHING
             """,
             {
@@ -99,6 +105,8 @@ def insert_trades(conn, ticker: str, trades: list[dict]) -> int:
                 "price":      t.get("yes_price") if t.get("yes_price") is not None else t.get("price"),
                 "count":      t.get("count"),
                 "taker_side": t.get("taker_side"),
+                "taker_outcome_side": t.get("taker_outcome_side"),
+                "taker_book_side": t.get("taker_book_side"),
             },
         )
         inserted += 1

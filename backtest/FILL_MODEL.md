@@ -31,9 +31,11 @@ configuration change.
 
 The policy operates on an unambiguous `MarketTrade` model with `buy_yes` /
 `sell_yes` aggressor direction. The event-loop adapter must map Kalshi's
-venue-specific trade-side field to that model only after its semantics are
-verified. If direction is unavailable, the default policy rejects the trade as
-evidence instead of guessing.
+canonical `taker_outcome_side` (or legacy `taker_side`) onto that model. Per
+Kalshi's [order-direction reference](https://docs.kalshi.com/getting_started/order_direction),
+`yes` / `bid` maps to `buy_yes` and `no` / `ask` maps to `sell_yes`. If
+direction is unavailable, the default policy rejects the trade as evidence
+instead of guessing.
 
 ## Lifecycle and Accounting
 
@@ -43,5 +45,7 @@ evidence instead of guessing.
   replacement timestamp.
 - Fees default to zero, so results are pre-fee unless a `FeeSchedule` is
   supplied. A configured per-contract fee is deducted from cash on every fill.
+- `RiskLimits` are explicit simulation inputs. A fill that would breach either
+  the per-market or aggregate limit is rejected and recorded in the trace.
 - Cash and contract inventory use `Decimal`; P&L can be marked to a YES price
   in cents or settled at 100 cents (YES outcome) / 0 cents (NO outcome).

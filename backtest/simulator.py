@@ -84,6 +84,18 @@ class FeeSchedule:
 
 
 @dataclass(frozen=True)
+class RiskLimits:
+    """Explicit simulator limits; callers opt in rather than using hidden defaults."""
+
+    max_position_per_market: Decimal
+    max_aggregate_exposure: Decimal
+
+    def __post_init__(self) -> None:
+        if self.max_position_per_market <= ZERO or self.max_aggregate_exposure <= ZERO:
+            raise ValueError("risk limits must be positive")
+
+
+@dataclass(frozen=True)
 class FillDecision:
     """Auditable result of applying a fill policy to one order/trade pair."""
 
@@ -176,7 +188,13 @@ class ConservativeFillPolicy:
         if not ZERO < self.participation_rate <= Decimal("1"):
             raise ValueError("participation_rate must be in (0, 1]")
 
-    def decide(self, order: SimulatedOrder, trade: MarketTrade) -> FillDecision:
+    def decide(
+        self,
+        order: SimulatedOrder,
+        trade: MarketTrade,
+        *,
+        max_quantity: Decimal | None = None,
+    ) -> FillDecision:
         if not order.is_active:
             return FillDecision(ZERO, f"order_{order.status.value}")
         if trade.ticker != order.ticker:
@@ -203,7 +221,11 @@ class ConservativeFillPolicy:
         if not price_crosses and not (self.allow_at_limit and at_limit):
             return FillDecision(ZERO, "trade_did_not_strictly_cross_limit")
 
+        if max_quantity is not None and max_quantity < ZERO:
+            raise ValueError("max_quantity cannot be negative")
         quantity = min(order.remaining_quantity, trade.quantity * self.participation_rate)
+        if max_quantity is not None:
+            quantity = min(quantity, max_quantity)
         return FillDecision(quantity, "strict_cross_with_observed_trade")
 
     def create_fill(
@@ -213,8 +235,9 @@ class ConservativeFillPolicy:
         order: SimulatedOrder,
         trade: MarketTrade,
         fees: FeeSchedule = FeeSchedule(),
+        max_quantity: Decimal | None = None,
     ) -> SimulatedFill | None:
-        decision = self.decide(order, trade)
+        decision = self.decide(order, trade, max_quantity=max_quantity)
         if not decision.approved:
             return None
         return SimulatedFill(
@@ -299,6 +322,7 @@ class SimulatorState:
     orders: dict[str, SimulatedOrder] = field(default_factory=dict)
     ledgers: dict[str, PositionLedger] = field(default_factory=dict)
     fills: list[SimulatedFill] = field(default_factory=list)
+    risk_limits: RiskLimits | None = None
 
     def submit(self, order: SimulatedOrder) -> None:
         if order.order_id in self.orders:
@@ -319,9 +343,26 @@ class SimulatorState:
             raise ValueError("fill cannot precede order submission")
         if fill.fill_id in {existing.fill_id for existing in self.fills}:
             raise ValueError(f"duplicate fill_id: {fill.fill_id}")
+        if not self.can_record_fill(fill):
+            raise ValueError("fill violates configured risk limits")
         order.apply_fill(fill.quantity)
         self.ledgers[fill.ticker].apply_fill(fill)
         self.fills.append(fill)
+
+    def can_record_fill(self, fill: SimulatedFill) -> bool:
+        """Return whether a fill preserves configured market and aggregate limits."""
+        if self.risk_limits is None:
+            return True
+        ledger = self.ledger(fill.ticker)
+        proposed_position = ledger.position + fill.position_delta
+        if abs(proposed_position) > self.risk_limits.max_position_per_market:
+            return False
+        aggregate = sum(
+            abs(existing.position)
+            for ticker, existing in self.ledgers.items()
+            if ticker != fill.ticker
+        ) + abs(proposed_position)
+        return aggregate <= self.risk_limits.max_aggregate_exposure
 
     def cancel_order(self, order_id: str, at: datetime) -> None:
         order = self.orders.get(order_id)
