@@ -32,7 +32,8 @@ The project is intended to support these claims once each is backed by implement
 | `models/` | Optional calibration metrics and fair-value models. |
 | `quoting/` | Inventory-aware quote generation and risk-limit logic. |
 | `backtest/replay.py` | Typed, timestamp-ordered, server-side streamed order-book replay and microstructure-feature derivation. |
-| `backtest/engine.py` | Existing backtest scaffold; conservative exchange/fill simulation remains Milestone 3 work. |
+| `backtest/simulator.py` | Typed order/fill lifecycle and exact-quantity cash, inventory, mark-to-market, and settlement accounting primitives. |
+| `backtest/engine.py` | Existing backtest scaffold; conservative fill policy and event orchestration remain Milestone 3 work. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
 | `.spec/STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
