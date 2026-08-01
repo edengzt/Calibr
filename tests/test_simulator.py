@@ -5,6 +5,9 @@ from decimal import Decimal
 import pytest
 
 from backtest.simulator import (
+    ConservativeFillPolicy,
+    FeeSchedule,
+    MarketTrade,
     OrderSide,
     OrderStatus,
     SimulatedFill,
@@ -42,6 +45,19 @@ def make_fill(**overrides):
     }
     values.update(overrides)
     return SimulatedFill(**values)
+
+
+def make_trade(**overrides):
+    values = {
+        "trade_id": "trade-1",
+        "ticker": "KXFED-TEST",
+        "price_cents": 41,
+        "quantity": Decimal("8"),
+        "occurred_at": NOW + timedelta(seconds=1),
+        "aggressor_side": OrderSide.SELL_YES,
+    }
+    values.update(overrides)
+    return MarketTrade(**values)
 
 
 def test_order_tracks_partial_and_complete_fills_exactly():
@@ -113,3 +129,61 @@ def test_state_rejects_untraceable_or_inconsistent_fills():
     state.record_fill(make_fill())
     with pytest.raises(ValueError, match="duplicate fill_id"):
         state.record_fill(make_fill())
+
+
+def test_conservative_policy_requires_strict_opposite_side_trade_and_caps_quantity():
+    order = make_order(quantity=Decimal("10"))
+    policy = ConservativeFillPolicy()
+
+    decision = policy.decide(order, make_trade())
+    assert decision.approved is True
+    assert decision.quantity == Decimal("2")  # 25% of the observed eight-contract print
+
+    assert policy.decide(order, make_trade(price_cents=42)).reason == "trade_did_not_strictly_cross_limit"
+    assert policy.decide(order, make_trade(aggressor_side=OrderSide.BUY_YES)).reason == "non_crossing_aggressor_side"
+    assert policy.decide(order, make_trade(aggressor_side=None)).reason == "unknown_aggressor_side"
+    assert policy.decide(order, make_trade(occurred_at=NOW)).reason == "trade_not_after_submission"
+
+
+def test_policy_can_explicitly_enable_at_limit_fills_and_apply_fees():
+    order = make_order(quantity=Decimal("3"))
+    policy = ConservativeFillPolicy(allow_at_limit=True, participation_rate=Decimal("1"))
+    fill = policy.create_fill(
+        fill_id="fill-at-limit",
+        order=order,
+        trade=make_trade(price_cents=42, quantity=Decimal("5")),
+        fees=FeeSchedule(per_contract_cents=Decimal("0.5")),
+    )
+
+    assert fill is not None
+    assert fill.quantity == Decimal("3")
+    assert fill.fee_cents == Decimal("1.5")
+    assert fill.cash_delta_cents == Decimal("-127.5")
+
+
+def test_state_supports_cancel_replace_and_deterministic_expiry():
+    state = SimulatorState()
+    first = make_order(order_id="a", expires_at=NOW + timedelta(seconds=10))
+    second = make_order(order_id="b", expires_at=NOW + timedelta(seconds=5))
+    state.submit(first)
+    state.submit(second)
+
+    replacement_time = NOW + timedelta(seconds=2)
+    replacement = make_order(order_id="a-r1", price_cents=43, submitted_at=replacement_time)
+    state.replace_order("a", replacement, replacement_time)
+
+    assert first.status is OrderStatus.CANCELLED
+    assert state.orders["a-r1"].status is OrderStatus.OPEN
+    assert state.expire_orders(NOW + timedelta(seconds=5)) == ("b",)
+    assert second.status is OrderStatus.EXPIRED
+
+
+def test_expired_order_never_accepts_a_policy_fill():
+    order = make_order(expires_at=NOW + timedelta(seconds=5))
+    decision = ConservativeFillPolicy().decide(
+        order,
+        make_trade(occurred_at=NOW + timedelta(seconds=5)),
+    )
+
+    assert decision.approved is False
+    assert decision.reason == "order_expired"

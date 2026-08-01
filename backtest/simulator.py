@@ -41,6 +41,60 @@ class OrderStatus(str, Enum):
     EXPIRED = "expired"
 
 
+@dataclass(frozen=True)
+class MarketTrade:
+    """Trade evidence used by the conservative fill policy.
+
+    ``aggressor_side`` is the side of the incoming YES order: a SELL_YES
+    aggressor consumes resting YES bids, while BUY_YES consumes YES asks.
+    The future database adapter must map venue-specific trade fields onto this
+    unambiguous representation before those trades can create fills.
+    """
+
+    trade_id: str
+    ticker: str
+    price_cents: int
+    quantity: Decimal
+    occurred_at: datetime
+    aggressor_side: OrderSide | None
+
+    def __post_init__(self) -> None:
+        if not self.trade_id or not self.ticker:
+            raise ValueError("trade_id and ticker are required")
+        if not 1 <= self.price_cents <= 99:
+            raise ValueError("trade price must be between 1 and 99 cents")
+        if self.quantity <= ZERO:
+            raise ValueError("trade quantity must be positive")
+
+
+@dataclass(frozen=True)
+class FeeSchedule:
+    """Optional per-contract simulation fee; zero keeps a run pre-fee."""
+
+    per_contract_cents: Decimal = ZERO
+
+    def __post_init__(self) -> None:
+        if self.per_contract_cents < ZERO:
+            raise ValueError("per-contract fee cannot be negative")
+
+    def fee_for(self, quantity: Decimal) -> Decimal:
+        if quantity <= ZERO:
+            raise ValueError("fee quantity must be positive")
+        return self.per_contract_cents * quantity
+
+
+@dataclass(frozen=True)
+class FillDecision:
+    """Auditable result of applying a fill policy to one order/trade pair."""
+
+    quantity: Decimal
+    reason: str
+
+    @property
+    def approved(self) -> bool:
+        return self.quantity > ZERO
+
+
 @dataclass
 class SimulatedOrder:
     """A deterministic strategy limit order; callers supply ``order_id``."""
@@ -106,6 +160,77 @@ class SimulatedOrder:
 
 
 @dataclass(frozen=True)
+class ConservativeFillPolicy:
+    """No-queue-information fill policy used until richer trade data exists.
+
+    The default permits at most 25% of a print only when it strictly improves
+    through our quote and has an explicit opposing aggressor. This excludes
+    at-touch fills, where queue position cannot be inferred from snapshots.
+    """
+
+    participation_rate: Decimal = Decimal("0.25")
+    allow_at_limit: bool = False
+    require_aggressor_side: bool = True
+
+    def __post_init__(self) -> None:
+        if not ZERO < self.participation_rate <= Decimal("1"):
+            raise ValueError("participation_rate must be in (0, 1]")
+
+    def decide(self, order: SimulatedOrder, trade: MarketTrade) -> FillDecision:
+        if not order.is_active:
+            return FillDecision(ZERO, f"order_{order.status.value}")
+        if trade.ticker != order.ticker:
+            return FillDecision(ZERO, "ticker_mismatch")
+        if trade.occurred_at <= order.submitted_at:
+            return FillDecision(ZERO, "trade_not_after_submission")
+        if order.expires_at is not None and trade.occurred_at >= order.expires_at:
+            return FillDecision(ZERO, "order_expired")
+        if self.require_aggressor_side and trade.aggressor_side is None:
+            return FillDecision(ZERO, "unknown_aggressor_side")
+
+        expected_aggressor = (
+            OrderSide.SELL_YES if order.side is OrderSide.BUY_YES else OrderSide.BUY_YES
+        )
+        if trade.aggressor_side is not None and trade.aggressor_side is not expected_aggressor:
+            return FillDecision(ZERO, "non_crossing_aggressor_side")
+
+        if order.side is OrderSide.BUY_YES:
+            price_crosses = trade.price_cents < order.price_cents
+            at_limit = trade.price_cents == order.price_cents
+        else:
+            price_crosses = trade.price_cents > order.price_cents
+            at_limit = trade.price_cents == order.price_cents
+        if not price_crosses and not (self.allow_at_limit and at_limit):
+            return FillDecision(ZERO, "trade_did_not_strictly_cross_limit")
+
+        quantity = min(order.remaining_quantity, trade.quantity * self.participation_rate)
+        return FillDecision(quantity, "strict_cross_with_observed_trade")
+
+    def create_fill(
+        self,
+        *,
+        fill_id: str,
+        order: SimulatedOrder,
+        trade: MarketTrade,
+        fees: FeeSchedule = FeeSchedule(),
+    ) -> SimulatedFill | None:
+        decision = self.decide(order, trade)
+        if not decision.approved:
+            return None
+        return SimulatedFill(
+            fill_id=fill_id,
+            order_id=order.order_id,
+            ticker=order.ticker,
+            side=order.side,
+            price_cents=order.price_cents,
+            quantity=decision.quantity,
+            filled_at=trade.occurred_at,
+            evidence_id=trade.trade_id,
+            fee_cents=fees.fee_for(decision.quantity),
+        )
+
+
+@dataclass(frozen=True)
 class SimulatedFill:
     """An auditable fill emitted by the future fill-policy layer."""
 
@@ -117,6 +242,7 @@ class SimulatedFill:
     quantity: Decimal
     filled_at: datetime
     evidence_id: str
+    fee_cents: Decimal = ZERO
 
     def __post_init__(self) -> None:
         if not self.fill_id or not self.order_id or not self.evidence_id:
@@ -127,10 +253,12 @@ class SimulatedFill:
             raise ValueError("fill price must be between 1 and 99 cents")
         if self.quantity <= ZERO:
             raise ValueError("fill quantity must be positive")
+        if self.fee_cents < ZERO:
+            raise ValueError("fill fee cannot be negative")
 
     @property
     def cash_delta_cents(self) -> Decimal:
-        return self.side.cash_sign * self.quantity * Decimal(self.price_cents)
+        return self.side.cash_sign * self.quantity * Decimal(self.price_cents) - self.fee_cents
 
     @property
     def position_delta(self) -> Decimal:
@@ -194,6 +322,36 @@ class SimulatorState:
         order.apply_fill(fill.quantity)
         self.ledgers[fill.ticker].apply_fill(fill)
         self.fills.append(fill)
+
+    def cancel_order(self, order_id: str, at: datetime) -> None:
+        order = self.orders.get(order_id)
+        if order is None:
+            raise ValueError(f"unknown order_id: {order_id}")
+        order.cancel(at)
+
+    def replace_order(self, order_id: str, replacement: SimulatedOrder, at: datetime) -> None:
+        """Cancel an active order and submit its deterministic replacement."""
+        order = self.orders.get(order_id)
+        if order is None:
+            raise ValueError(f"unknown order_id: {order_id}")
+        if not order.is_active:
+            raise ValueError(f"cannot replace {order.status.value} order {order_id}")
+        if replacement.ticker != order.ticker:
+            raise ValueError("replacement ticker must match original order")
+        if replacement.submitted_at != at:
+            raise ValueError("replacement submitted_at must equal replacement time")
+        order.cancel(at)
+        self.submit(replacement)
+
+    def expire_orders(self, at: datetime) -> tuple[str, ...]:
+        """Expire every due active order in deterministic order-id order."""
+        expired: list[str] = []
+        for order_id in sorted(self.orders):
+            order = self.orders[order_id]
+            if order.is_active and order.expires_at is not None and order.expires_at <= at:
+                order.expire(at)
+                expired.append(order_id)
+        return tuple(expired)
 
     def ledger(self, ticker: str) -> PositionLedger:
         return self.ledgers.setdefault(ticker, PositionLedger(ticker=ticker))

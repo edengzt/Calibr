@@ -69,7 +69,7 @@ Evidence to retain:
 
 ## Milestone 3 — Implement a Conservative Exchange Simulator
 
-**Status:** In progress. Task 1 (typed order, fill, ledger, and simulator-state primitives) is implemented; fill policy and event orchestration remain.
+**Status:** In progress. Tasks 1–4 are implemented: typed order/fill/ledger state, documented conservative fill policy, lifecycle transitions, and optional fee accounting. Event orchestration and final simulator verification remain.
 
 **Goal:** evaluate hypothetical limit quotes without optimistic fill assumptions.
 
