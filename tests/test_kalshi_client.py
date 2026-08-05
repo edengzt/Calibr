@@ -115,6 +115,27 @@ def test_current_trade_payload_is_normalized():
     assert normalized["count"] == Decimal("10.50")
 
 
+def test_trade_time_filters_are_forwarded_to_current_api(monkeypatch):
+    client = KalshiClient(use_demo=False)
+    observed = {}
+
+    def fake_get(path, params=None):
+        observed["path"] = path
+        observed["params"] = params
+        return {"trades": [], "cursor": ""}
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    try:
+        client.get_trades(min_ts=100, max_ts=200, limit=1_000)
+    finally:
+        client.close()
+
+    assert observed == {
+        "path": "/markets/trades",
+        "params": {"limit": 1_000, "min_ts": 100, "max_ts": 200},
+    }
+
+
 def test_empty_book_and_missing_optional_market_fields_are_supported(monkeypatch):
     client = KalshiClient(use_demo=False)
     monkeypatch.setattr(client, "_get", lambda *args, **kwargs: {"orderbook_fp": {}})

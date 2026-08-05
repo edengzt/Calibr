@@ -70,8 +70,43 @@ def verify(series_ticker: str | None = None) -> dict:
             params,
         ).fetchall()
 
+        trade_summary = conn.execute(
+            f"""
+            SELECT
+                COUNT(t.id) AS stored_trades,
+                COUNT(DISTINCT t.ticker) AS markets_with_trades,
+                MIN(t.ts) AS first_trade_at,
+                MAX(t.ts) AS last_trade_at
+            FROM trades t
+            JOIN markets m ON m.ticker = t.ticker
+            {filters}
+            """,
+            params,
+        ).fetchone()
+
+        overlap = conn.execute(
+            f"""
+            WITH snapshot_ranges AS (
+                SELECT s.ticker, MIN(s.ts) AS first_snapshot_at, MAX(s.ts) AS last_snapshot_at
+                FROM orderbook_snapshots s
+                JOIN markets m ON m.ticker = s.ticker
+                {raw_book_filter}
+                GROUP BY s.ticker
+            )
+            SELECT
+                COUNT(DISTINCT ranges.ticker) AS overlapping_markets,
+                COUNT(trades.id) AS overlapping_trade_events
+            FROM snapshot_ranges ranges
+            JOIN trades ON trades.ticker = ranges.ticker
+                AND trades.ts BETWEEN ranges.first_snapshot_at AND ranges.last_snapshot_at
+            """,
+            params,
+        ).fetchone()
+
     result = dict(row)
     result.update(summarize_raw_book_rows(raw_book_rows, result["markets"]))
+    result.update(dict(trade_summary))
+    result.update(dict(overlap))
     label = series_ticker or "all series"
     print(
         f"Ingestion coverage ({label}): {result['markets']} markets, "
@@ -80,7 +115,10 @@ def verify(series_ticker: str | None = None) -> dict:
         f"{result['markets_with_full_books']} markets "
         f"({result['markets_missing_full_books']} markets missing full books, "
         f"{result['invalid_raw_book_snapshots']} invalid raw payloads); "
-        f"range={result['first_snapshot_at']} to {result['last_snapshot_at']}"
+        f"range={result['first_snapshot_at']} to {result['last_snapshot_at']}; "
+        f"{result['stored_trades']} stored trades across {result['markets_with_trades']} markets, "
+        f"{result['overlapping_trade_events']} trades overlapping full-depth capture "
+        f"across {result['overlapping_markets']} markets"
     )
     return result
 

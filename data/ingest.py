@@ -108,6 +108,50 @@ def insert_snapshot(conn, m: dict, raw_book: dict | None = None) -> None:
     )
 
 
+def insert_trades(conn, trades: list[dict]) -> int:
+    """Persist normalized public trades idempotently for later fill simulation.
+
+    The public feed is deliberately queried with a small overlap window, so
+    duplicate observations are normal. Kalshi's trade ID is the idempotency
+    key; only rows newly inserted in this transaction count as captured.
+    """
+    inserted = 0
+    for trade in trades:
+        trade_id = trade.get("trade_id") or trade.get("id")
+        ticker = trade.get("ticker") or trade.get("market_ticker")
+        timestamp = trade.get("created_time") or trade.get("ts") or trade.get("date")
+        price = trade.get("yes_price") if trade.get("yes_price") is not None else trade.get("price")
+        quantity = trade.get("count")
+        if not trade_id or not ticker or timestamp is None or price is None or quantity is None:
+            continue
+        cursor = conn.execute(
+            """
+            INSERT INTO trades (
+                trade_id, ticker, ts, price, count, taker_side,
+                taker_outcome_side, taker_book_side
+            )
+            VALUES (
+                %(trade_id)s, %(ticker)s, %(ts)s, %(price)s, %(count)s, %(taker_side)s,
+                %(taker_outcome_side)s, %(taker_book_side)s
+            )
+            ON CONFLICT (trade_id) DO NOTHING
+            """,
+            {
+                "trade_id": trade_id,
+                "ticker": ticker,
+                "ts": timestamp,
+                "price": price,
+                "count": quantity,
+                "taker_side": trade.get("taker_side"),
+                "taker_outcome_side": trade.get("taker_outcome_side") or trade.get("taker_side"),
+                "taker_book_side": trade.get("taker_book_side"),
+            },
+        )
+        if cursor.rowcount == 1:
+            inserted += 1
+    return inserted
+
+
 def record_resolution_if_settled(conn, m: dict) -> None:
     """Record final resolution. ON CONFLICT DO NOTHING makes this idempotent."""
     result = m.get("result")
@@ -208,17 +252,39 @@ def fetch_full_orderbooks(client: KalshiClient, markets: list[dict]) -> dict[str
     return books
 
 
+def fetch_recent_trades(client: KalshiClient, tracked_tickers: set[str], min_ts: int) -> list[dict]:
+    """Fetch one incremental global trade stream and retain only tracked markets.
+
+    Kalshi does not expose a batch ticker filter for public trades. One
+    timestamp-bounded global request is substantially safer than polling every
+    market independently; a small caller-provided overlap plus database
+    idempotency protects against request-boundary losses.
+    """
+    if not tracked_tickers:
+        return []
+    return [
+        trade for trade in client.iter_trades(min_ts=min_ts)
+        if (trade.get("ticker") or trade.get("market_ticker")) in tracked_tickers
+    ]
+
+
 def run(series_ticker: str | None, status: str | None, interval_seconds: int,
-        verbose: bool = False, once: bool = False, max_passes: int | None = None) -> None:
+        verbose: bool = False, once: bool = False, max_passes: int | None = None,
+        capture_trades: bool = False, trade_lookback_seconds: int = 30) -> None:
+    if trade_lookback_seconds < 0:
+        raise ValueError("trade_lookback_seconds must be non-negative")
     print(f"Starting ingestion loop (interval={interval_seconds}s, "
-          f"series={series_ticker or 'all'}, status={status or 'all'})")
+          f"series={series_ticker or 'all'}, status={status or 'all'}, "
+          f"capture_trades={capture_trades})")
 
     with KalshiClient(use_demo=False) as client:
         pass_num = 0
+        trade_watermark = int(time.time()) - trade_lookback_seconds
         while True:
             pass_num += 1
             n_markets = 0
             n_settled  = 0
+            n_trades = 0
             try:
                 with get_conn() as conn:
                     kwargs: dict = {}
@@ -229,6 +295,14 @@ def run(series_ticker: str | None, status: str | None, interval_seconds: int,
 
                     markets = list(client.iter_markets(**kwargs))
                     orderbooks = fetch_full_orderbooks(client, markets)
+                    recent_trades = (
+                        fetch_recent_trades(
+                            client,
+                            {market["ticker"] for market in markets if market.get("ticker")},
+                            trade_watermark,
+                        )
+                        if capture_trades else []
+                    )
 
                     for m in markets:
                         upsert_market(conn, m)
@@ -246,11 +320,17 @@ def run(series_ticker: str | None, status: str | None, interval_seconds: int,
                             print(f"  [{m.get('ticker')}] {m.get('status')} "
                                   f"yes_bid={m.get('yes_bid')} no_bid={m.get('no_bid')} "
                                   f"levels={levels}")
+                    if capture_trades:
+                        n_trades = insert_trades(conn, recent_trades)
 
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 print(f"[{ts}] pass #{pass_num}: {n_markets} markets "
                       f"({n_settled} settled) ingested; "
-                      f"{len(orderbooks)}/{n_markets} full books captured")
+                      f"{len(orderbooks)}/{n_markets} full books captured; "
+                      f"{n_trades} new tracked trades captured")
+                # Keep a short overlap to avoid a request-boundary gap. Trade
+                # IDs make repeated observations harmless.
+                trade_watermark = int(time.time()) - trade_lookback_seconds
 
             except Exception as exc:
                 print(f"[ERROR] pass #{pass_num} failed: {exc}")
@@ -282,6 +362,14 @@ if __name__ == "__main__":
         "--verbose", action="store_true",
         help="Print each market on every pass",
     )
+    parser.add_argument(
+        "--capture-trades", action="store_true",
+        help="Capture incremental public trades for tracked markets on each pass",
+    )
+    parser.add_argument(
+        "--trade-lookback-seconds", type=int, default=30,
+        help="Overlapped global trade-query window; IDs make repeat observations safe (default: 30)",
+    )
     bounded_group = parser.add_mutually_exclusive_group()
     bounded_group.add_argument(
         "--once", action="store_true",
@@ -302,4 +390,6 @@ if __name__ == "__main__":
         verbose=args.verbose,
         once=args.once,
         max_passes=args.passes,
+        capture_trades=args.capture_trades,
+        trade_lookback_seconds=args.trade_lookback_seconds,
     )

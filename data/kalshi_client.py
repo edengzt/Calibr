@@ -313,22 +313,30 @@ class KalshiClient:
         return books
 
     def get_trades(self, ticker: Optional[str] = None, cursor: Optional[str] = None,
+                    min_ts: Optional[int] = None, max_ts: Optional[int] = None,
                     limit: int = 200) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": limit}
         if ticker:
             params["ticker"] = ticker
         if cursor:
             params["cursor"] = cursor
+        if min_ts is not None:
+            params["min_ts"] = min_ts
+        if max_ts is not None:
+            params["max_ts"] = max_ts
         data = self._get("/markets/trades", params=params)
         normalized = dict(data)
         normalized["trades"] = [normalize_trade(t) for t in data.get("trades", [])]
         return normalized
 
-    def iter_trades(self, ticker: Optional[str] = None) -> Any:
-        """Generator that pages through ALL trades for a ticker."""
+    def iter_trades(self, ticker: Optional[str] = None, min_ts: Optional[int] = None,
+                    max_ts: Optional[int] = None, limit: int = 1_000) -> Any:
+        """Generator that pages through trades, optionally constrained by time."""
         cursor = None
         while True:
-            page = self.get_trades(ticker=ticker, cursor=cursor)
+            page = self.get_trades(
+                ticker=ticker, cursor=cursor, min_ts=min_ts, max_ts=max_ts, limit=limit
+            )
             trades = page.get("trades", [])
             for t in trades:
                 yield t

@@ -3,7 +3,15 @@ from psycopg.types.json import Json
 
 import pytest
 
-from data.ingest import _batches, fetch_full_orderbooks, insert_snapshot, run, validate_raw_book
+from data.ingest import (
+    _batches,
+    fetch_full_orderbooks,
+    fetch_recent_trades,
+    insert_snapshot,
+    insert_trades,
+    run,
+    validate_raw_book,
+)
 from data.verify_ingestion import summarize_raw_book_rows
 
 
@@ -42,6 +50,61 @@ def test_fetch_full_orderbooks_rejects_missing_ticker_from_batch_response():
 
     with pytest.raises(RuntimeError, match="omitted requested tickers: KX-B"):
         fetch_full_orderbooks(FakeClient(), [{"ticker": "KX-A"}, {"ticker": "KX-B"}])
+
+
+def test_fetch_recent_trades_uses_one_timestamp_bounded_stream_and_filters_tickers():
+    class FakeClient:
+        def __init__(self):
+            self.min_ts = None
+
+        def iter_trades(self, min_ts):
+            self.min_ts = min_ts
+            return iter([
+                {"trade_id": "tracked", "ticker": "KX-A"},
+                {"trade_id": "other", "ticker": "KX-OTHER"},
+                {"trade_id": "tracked-market-ticker", "market_ticker": "KX-B"},
+            ])
+
+    client = FakeClient()
+    trades = fetch_recent_trades(client, {"KX-A", "KX-B"}, min_ts=123)
+
+    assert client.min_ts == 123
+    assert [trade["trade_id"] for trade in trades] == ["tracked", "tracked-market-ticker"]
+
+
+def test_insert_trades_preserves_direction_fields_and_counts_only_new_rows():
+    class Cursor:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
+
+    class FakeConn:
+        def __init__(self):
+            self.params = []
+
+        def execute(self, _query, params):
+            self.params.append(params)
+            return Cursor(1 if len(self.params) == 1 else 0)
+
+    conn = FakeConn()
+    inserted = insert_trades(
+        conn,
+        [
+            {
+                "trade_id": "trade-1", "ticker": "KX-A", "created_time": "2026-08-04T00:00:00Z",
+                "yes_price": 42, "count": 1, "taker_side": "yes",
+                "taker_outcome_side": "yes", "taker_book_side": "bid",
+            },
+            {
+                "trade_id": "trade-1", "ticker": "KX-A", "created_time": "2026-08-04T00:00:00Z",
+                "yes_price": 42, "count": 1, "taker_side": "yes",
+            },
+        ],
+    )
+
+    assert inserted == 1
+    assert conn.params[0]["taker_outcome_side"] == "yes"
+    assert conn.params[0]["taker_book_side"] == "bid"
+    assert conn.params[1]["taker_outcome_side"] == "yes"
 
 
 @pytest.mark.parametrize(
