@@ -44,3 +44,6 @@ Desktop.ini
 logs/
 tmp/
 temp/
+# JavaScript dashboard artifacts
+dashboard/web/node_modules/
+dashboard/web/dist/

@@ -36,6 +36,9 @@ The project is intended to support these claims once each is backed by implement
 | `backtest/FILL_MODEL.md` | Fill assumptions, queue-position limitations, lifecycle rules, and fee treatment. |
 | `backtest/simulation.py` | Event loop merging snapshot replay, stored trade evidence, deterministic orders, risk checks, and an auditable trace. |
 | `backtest/engine.py` | Legacy backtest scaffold; migrate it to the simulator path during Milestone 4. |
+| `dashboard/server.py` | Read-only local HTTP API exposing capture coverage, market inventory, and replay/depth data. |
+| `dashboard/web/` | React/Vite dashboard for visual inspection of stored capture and market microstructure. |
+| `scripts/run_dashboard.sh` | One-command local launcher for the dashboard API and React client; selects unused ports and stops both on Ctrl-C. |
 | `tests/` | Unit tests, currently focused on quoting/risk behavior. |
 | `.spec/STEERING.md` | Product direction, phased roadmap, mathematical reference, and scope boundaries. |
 
@@ -177,6 +180,12 @@ python -m data.backfill --series-ticker KXFED --limit 5 --sleep-ms 0
 Every stored row contains both the legacy `taker_side` and the canonical `taker_outcome_side` direction field. The simulator trade adapter streamed and decoded all 160 trades for `KXFED-26JUN-T4.25`, mapping 130 to `BUY_YES` and 30 to `SELL_YES` aggression.
 
 There are currently **zero tickers with both full-depth snapshots and stored trades**. The historical trades belong to settled June markets, while the captured full-depth books belong to later open markets. This validates the trade-ingestion and direction-adapter boundary, but it does not yet validate a live replay → trade evidence → fill sequence. To do that, extend live ingestion to store trades concurrently with full-depth snapshots for the same open ticker/time window.
+
+### Dashboard Verification (2026-09-26)
+
+A local React/Vite dashboard and read-only Python API were added to demonstrate the stored market-data pipeline and replay output without exposing database credentials to the browser. The dashboard displays capture coverage, captured-market counts, stored-trade counts, a replayed midpoint/spread series, the latest full-depth YES/NO books, and per-market inventory.
+
+Verification against local Postgres returned **103 tracked KXFED markets**, **1,960 full-depth snapshots** across **98 captured markets**, and **373 stored trades**. The backend test suite passed with **55 tests**, and the React production build completed successfully. The README includes a screenshot from that verified local dataset.
 
 ## Next Integration Steps
 

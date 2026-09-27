@@ -57,7 +57,37 @@ python -m data.verify_ingestion --series-ticker KXFED
 - `backtest/simulator.py` — conservative order/fill lifecycle and accounting primitives.
 - `backtest/simulation.py` — event-driven replay/trade/order integration with an auditable trace.
 - `backtest/engine.py` — legacy backtest scaffold to migrate onto the simulator path.
+- `dashboard/` — local React dashboard and read-only Python API for capture/replay inspection.
 - `.spec/` — durable project and agent context.
+
+## Local Dashboard
+
+The dashboard makes the stored market-data pipeline visible: capture coverage,
+replayed midpoint/spread, displayed liquidity, and per-market snapshot/trade
+counts. It is intentionally read-only and uses the same Postgres/replay path
+as the research components.
+
+With Postgres running and the dependencies installed, launch both the API and
+React client with one command:
+
+```sh
+./scripts/run_dashboard.sh
+```
+
+Open the URL printed by the script (normally `http://127.0.0.1:5173`). Press
+`Ctrl-C` to stop both processes. If either normal port is occupied, the script
+selects the next available port automatically.
+
+For first-time JavaScript setup only:
+
+```sh
+cd dashboard/web && npm install
+```
+
+To request specific ports, set `CALIBR_API_PORT` and/or `CALIBR_WEB_PORT`
+before running the launcher.
+
+![Calibr dashboard showing capture coverage, replayed midpoint, and full-depth liquidity](docs/dashboard.png)
 
 ## Roadmap
 
