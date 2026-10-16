@@ -71,13 +71,15 @@ def markets(series_ticker: str, limit: int = 100) -> list[dict[str, Any]]:
                 m.status,
                 COUNT(s.id) FILTER (WHERE s.raw_book IS NOT NULL) AS full_depth_snapshots,
                 MAX(s.ts) FILTER (WHERE s.raw_book IS NOT NULL) AS latest_snapshot_at,
+                COUNT(DISTINCT s.yes_bid) FILTER (WHERE s.raw_book IS NOT NULL)
+                    + COUNT(DISTINCT s.yes_ask) FILTER (WHERE s.raw_book IS NOT NULL) AS quote_levels,
                 COUNT(t.id) AS trades
             FROM markets m
             LEFT JOIN orderbook_snapshots s ON s.ticker = m.ticker
             LEFT JOIN trades t ON t.ticker = m.ticker
             WHERE m.series_ticker = %(series_ticker)s
             GROUP BY m.ticker, m.title, m.status
-            ORDER BY full_depth_snapshots DESC, m.ticker
+            ORDER BY quote_levels DESC, full_depth_snapshots DESC, m.ticker
             LIMIT %(limit)s
             """,
             {"series_ticker": series_ticker, "limit": limit},
@@ -97,6 +99,8 @@ def replay(ticker: str, limit: int = 100) -> dict[str, Any]:
             "ts": event.ts,
             "mid": event.features.mid_probability,
             "spread_cents": event.features.spread_cents,
+            "best_yes_bid": event.features.best_yes_bid,
+            "best_yes_ask": event.features.best_yes_ask,
             "yes_depth": event.features.yes_displayed_depth,
             "no_depth": event.features.no_displayed_depth,
             "imbalance": event.features.order_book_imbalance,
