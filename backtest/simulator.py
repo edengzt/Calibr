@@ -4,7 +4,7 @@ The later fill-policy and event-loop layers operate on these objects.  This
 module deliberately contains no inference about whether an order *should*
 fill: every state transition requires an explicit ``SimulatedFill``.
 
-All money is represented in cents and all contract quantities use ``Decimal``
+All money is represented in integer 1/10,000-dollar ticks and all contract quantities use ``Decimal``
 because Kalshi's fixed-point quantities may be fractional.
 """
 from __future__ import annotations
@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+
+from data.kalshi_client import PRICE_TICKS_PER_DOLLAR
 
 
 ZERO = Decimal("0")
@@ -53,7 +55,7 @@ class MarketTrade:
 
     trade_id: str
     ticker: str
-    price_cents: int
+    price_ticks: int
     quantity: Decimal
     occurred_at: datetime
     aggressor_side: OrderSide | None
@@ -61,8 +63,8 @@ class MarketTrade:
     def __post_init__(self) -> None:
         if not self.trade_id or not self.ticker:
             raise ValueError("trade_id and ticker are required")
-        if not 1 <= self.price_cents <= 99:
-            raise ValueError("trade price must be between 1 and 99 cents")
+        if not 1 <= self.price_ticks < PRICE_TICKS_PER_DOLLAR:
+            raise ValueError("trade price must be between 1 and 9,999 ticks")
         if self.quantity <= ZERO:
             raise ValueError("trade quantity must be positive")
 
@@ -71,16 +73,16 @@ class MarketTrade:
 class FeeSchedule:
     """Optional per-contract simulation fee; zero keeps a run pre-fee."""
 
-    per_contract_cents: Decimal = ZERO
+    per_contract_ticks: Decimal = ZERO
 
     def __post_init__(self) -> None:
-        if self.per_contract_cents < ZERO:
+        if self.per_contract_ticks < ZERO:
             raise ValueError("per-contract fee cannot be negative")
 
     def fee_for(self, quantity: Decimal) -> Decimal:
         if quantity <= ZERO:
             raise ValueError("fee quantity must be positive")
-        return self.per_contract_cents * quantity
+        return self.per_contract_ticks * quantity
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,7 @@ class SimulatedOrder:
     order_id: str
     ticker: str
     side: OrderSide
-    price_cents: int
+    price_ticks: int
     quantity: Decimal
     submitted_at: datetime
     expires_at: datetime | None = None
@@ -126,8 +128,8 @@ class SimulatedOrder:
             raise ValueError("order_id is required")
         if not self.ticker:
             raise ValueError("ticker is required")
-        if not 1 <= self.price_cents <= 99:
-            raise ValueError("limit order price must be between 1 and 99 cents")
+        if not 1 <= self.price_ticks < PRICE_TICKS_PER_DOLLAR:
+            raise ValueError("limit order price must be between 1 and 9,999 ticks")
         if self.quantity <= ZERO:
             raise ValueError("order quantity must be positive")
         if self.filled_quantity < ZERO or self.filled_quantity > self.quantity:
@@ -213,11 +215,11 @@ class ConservativeFillPolicy:
             return FillDecision(ZERO, "non_crossing_aggressor_side")
 
         if order.side is OrderSide.BUY_YES:
-            price_crosses = trade.price_cents < order.price_cents
-            at_limit = trade.price_cents == order.price_cents
+            price_crosses = trade.price_ticks < order.price_ticks
+            at_limit = trade.price_ticks == order.price_ticks
         else:
-            price_crosses = trade.price_cents > order.price_cents
-            at_limit = trade.price_cents == order.price_cents
+            price_crosses = trade.price_ticks > order.price_ticks
+            at_limit = trade.price_ticks == order.price_ticks
         if not price_crosses and not (self.allow_at_limit and at_limit):
             return FillDecision(ZERO, "trade_did_not_strictly_cross_limit")
 
@@ -245,11 +247,11 @@ class ConservativeFillPolicy:
             order_id=order.order_id,
             ticker=order.ticker,
             side=order.side,
-            price_cents=order.price_cents,
+            price_ticks=order.price_ticks,
             quantity=decision.quantity,
             filled_at=trade.occurred_at,
             evidence_id=trade.trade_id,
-            fee_cents=fees.fee_for(decision.quantity),
+            fee_ticks=fees.fee_for(decision.quantity),
         )
 
 
@@ -261,27 +263,27 @@ class SimulatedFill:
     order_id: str
     ticker: str
     side: OrderSide
-    price_cents: int
+    price_ticks: int
     quantity: Decimal
     filled_at: datetime
     evidence_id: str
-    fee_cents: Decimal = ZERO
+    fee_ticks: Decimal = ZERO
 
     def __post_init__(self) -> None:
         if not self.fill_id or not self.order_id or not self.evidence_id:
             raise ValueError("fill_id, order_id, and evidence_id are required")
         if not self.ticker:
             raise ValueError("ticker is required")
-        if not 1 <= self.price_cents <= 99:
-            raise ValueError("fill price must be between 1 and 99 cents")
+        if not 1 <= self.price_ticks < PRICE_TICKS_PER_DOLLAR:
+            raise ValueError("fill price must be between 1 and 9,999 ticks")
         if self.quantity <= ZERO:
             raise ValueError("fill quantity must be positive")
-        if self.fee_cents < ZERO:
+        if self.fee_ticks < ZERO:
             raise ValueError("fill fee cannot be negative")
 
     @property
-    def cash_delta_cents(self) -> Decimal:
-        return self.side.cash_sign * self.quantity * Decimal(self.price_cents) - self.fee_cents
+    def cash_delta_ticks(self) -> Decimal:
+        return self.side.cash_sign * self.quantity * Decimal(self.price_ticks) - self.fee_ticks
 
     @property
     def position_delta(self) -> Decimal:
@@ -294,25 +296,25 @@ class PositionLedger:
 
     ticker: str
     position: Decimal = ZERO
-    cash_cents: Decimal = ZERO
+    cash_ticks: Decimal = ZERO
     fills: list[SimulatedFill] = field(default_factory=list)
 
     def apply_fill(self, fill: SimulatedFill) -> None:
         if fill.ticker != self.ticker:
             raise ValueError(f"fill ticker {fill.ticker} does not match ledger {self.ticker}")
         self.position += fill.position_delta
-        self.cash_cents += fill.cash_delta_cents
+        self.cash_ticks += fill.cash_delta_ticks
         self.fills.append(fill)
 
-    def mark_to_market_cents(self, yes_mark_cents: int) -> Decimal:
-        if not 0 <= yes_mark_cents <= 100:
-            raise ValueError("mark price must be between 0 and 100 cents")
-        return self.cash_cents + self.position * Decimal(yes_mark_cents)
+    def mark_to_market_ticks(self, yes_mark_ticks: int) -> Decimal:
+        if not 0 <= yes_mark_ticks <= PRICE_TICKS_PER_DOLLAR:
+            raise ValueError("mark price must be between 0 and 10,000 ticks")
+        return self.cash_ticks + self.position * Decimal(yes_mark_ticks)
 
-    def settlement_pnl_cents(self, outcome: int) -> Decimal:
+    def settlement_pnl_ticks(self, outcome: int) -> Decimal:
         if outcome not in (0, 1):
             raise ValueError("outcome must be 0 (NO) or 1 (YES)")
-        return self.mark_to_market_cents(100 if outcome else 0)
+        return self.mark_to_market_ticks(PRICE_TICKS_PER_DOLLAR if outcome else 0)
 
 
 @dataclass
@@ -337,7 +339,7 @@ class SimulatorState:
             raise ValueError(f"unknown order_id: {fill.order_id}")
         if order.ticker != fill.ticker or order.side is not fill.side:
             raise ValueError("fill does not match order ticker or side")
-        if order.price_cents != fill.price_cents:
+        if order.price_ticks != fill.price_ticks:
             raise ValueError("fill price must equal the submitted limit price")
         if fill.filled_at < order.submitted_at:
             raise ValueError("fill cannot precede order submission")

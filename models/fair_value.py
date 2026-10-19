@@ -13,6 +13,8 @@ from typing import Optional, Protocol
 
 import numpy as np
 
+from data.kalshi_client import PRICE_TICKS_PER_DOLLAR
+
 
 class FairValueModel(Protocol):
     name: str
@@ -28,9 +30,9 @@ class MarketFeatures:
     Keep this dataclass as the single source of truth for feature
     definitions so backtest and live code can't drift apart.
     """
-    yes_bid: Optional[int]      # cents, 1-99
-    yes_ask: Optional[int]      # cents, 1-99
-    last_price: Optional[int]   # cents
+    yes_bid: Optional[int]      # 1/10,000-dollar ticks
+    yes_ask: Optional[int]      # 1/10,000-dollar ticks
+    last_price: Optional[int]   # 1/10,000-dollar ticks
     volume_24h: float
     open_interest: float
     seconds_to_resolution: float
@@ -41,7 +43,7 @@ class MarketFeatures:
     def mid_prob(self) -> Optional[float]:
         if self.yes_bid is None or self.yes_ask is None:
             return None
-        return (self.yes_bid + self.yes_ask) / 2.0 / 100.0
+        return (self.yes_bid + self.yes_ask) / 2.0 / PRICE_TICKS_PER_DOLLAR
 
 
 class NaiveMidModel:
@@ -53,7 +55,7 @@ class NaiveMidModel:
         if mid is not None:
             return mid
         if features.last_price is not None:
-            return features.last_price / 100.0
+            return features.last_price / PRICE_TICKS_PER_DOLLAR
         return 0.5
 
 
@@ -143,7 +145,7 @@ class LogisticCalibratedModel:
 
 if __name__ == "__main__":
     demo_features = MarketFeatures(
-        yes_bid=61, yes_ask=63, last_price=62,
+        yes_bid=6100, yes_ask=6300, last_price=6200,
         volume_24h=12840, open_interest=34000,
         seconds_to_resolution=3600 * 6,
         order_book_imbalance=0.2,

@@ -98,15 +98,15 @@ def replay(ticker: str, limit: int = 100) -> dict[str, Any]:
             "id": event.snapshot_id,
             "ts": event.ts,
             "mid": event.features.mid_probability,
-            "spread_cents": event.features.spread_cents,
+            "spread_ticks": event.features.spread_ticks,
             "best_yes_bid": event.features.best_yes_bid,
             "best_yes_ask": event.features.best_yes_ask,
             "yes_depth": event.features.yes_displayed_depth,
             "no_depth": event.features.no_displayed_depth,
             "imbalance": event.features.order_book_imbalance,
             "status": event.features.status,
-            "yes_bids": [{"price_cents": level.price_cents, "count": level.count} for level in event.book.yes_bids],
-            "no_bids": [{"price_cents": level.price_cents, "count": level.count} for level in event.book.no_bids],
+            "yes_bids": [{"price_ticks": level.price_ticks, "count": level.count} for level in event.book.yes_bids],
+            "no_bids": [{"price_ticks": level.price_ticks, "count": level.count} for level in event.book.no_bids],
         })
         if len(events) >= limit:
             break

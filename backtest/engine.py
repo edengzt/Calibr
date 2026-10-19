@@ -19,14 +19,15 @@ from models.calibration import evaluate
 from models.fair_value import FairValueModel, MarketFeatures
 from quoting.engine import Inventory, QuotingEngine
 from db.db import get_conn
+from data.kalshi_client import PRICE_TICKS_PER_DOLLAR
 
 
 @dataclass
 class BacktestResult:
     model_name: str
-    realized_pnl_cents: float
+    realized_pnl_ticks: float
     n_fills: int
-    max_drawdown_cents: float
+    max_drawdown_ticks: float
     predictions: list[float] = field(default_factory=list)
     outcomes: list[int] = field(default_factory=list)
 
@@ -72,8 +73,8 @@ def load_resolution(ticker: str) -> int | None:
 def _order_flow_imbalance(prev_tick: dict | None, tick: dict) -> float:
     if not prev_tick:
         return 0.0
-    prev_mid = ((prev_tick["yes_bid"] or 50) + (prev_tick["yes_ask"] or 50)) / 200.0
-    cur_mid = ((tick["yes_bid"] or 50) + (tick["yes_ask"] or 50)) / 200.0
+    prev_mid = ((prev_tick["yes_bid"] or 5000) + (prev_tick["yes_ask"] or 5000)) / (2 * PRICE_TICKS_PER_DOLLAR)
+    cur_mid = ((tick["yes_bid"] or 5000) + (tick["yes_ask"] or 5000)) / (2 * PRICE_TICKS_PER_DOLLAR)
     return max(min((cur_mid - prev_mid) * 10, 1.0), -1.0)  # crude proxy, refine later
 
 
@@ -85,7 +86,7 @@ def run_backtest(ticker: str, model: FairValueModel,
     engine = QuotingEngine()
     inventory = Inventory(positions={})
 
-    pnl_cents = 0.0
+    pnl_ticks = 0.0
     running_pnl_history = []
     n_fills = 0
     predictions, outcomes = [], []
@@ -124,22 +125,22 @@ def run_backtest(ticker: str, model: FairValueModel,
                 if prev_tick is None or (prev_tick["ts"] < t["ts"] <= tick["ts"])
             ]
             for t in crossing_trades:
-                if t["price"] <= quote.bid_cents:
+                if t["price"] <= quote.bid_ticks:
                     inventory.positions[ticker] = inventory.positions.get(ticker, 0) + t["count"]
-                    pnl_cents -= t["count"] * quote.bid_cents
+                    pnl_ticks -= t["count"] * quote.bid_ticks
                     n_fills += 1
-                elif t["price"] >= quote.ask_cents:
+                elif t["price"] >= quote.ask_ticks:
                     inventory.positions[ticker] = inventory.positions.get(ticker, 0) - t["count"]
-                    pnl_cents += t["count"] * quote.ask_cents
+                    pnl_ticks += t["count"] * quote.ask_ticks
                     n_fills += 1
 
-        running_pnl_history.append(pnl_cents)
+        running_pnl_history.append(pnl_ticks)
         prev_tick = tick
 
-    # Mark remaining inventory to the final resolution outcome (0 or 100 cents).
+    # Mark remaining inventory to the final resolution outcome (0 or 10,000 ticks).
     if outcome is not None and ticker in inventory.positions:
-        settle_price = 100 if outcome == 1 else 0
-        pnl_cents += inventory.positions[ticker] * settle_price
+        settle_price = PRICE_TICKS_PER_DOLLAR if outcome == 1 else 0
+        pnl_ticks += inventory.positions[ticker] * settle_price
 
     peak = float("-inf")
     max_dd = 0.0
@@ -149,9 +150,9 @@ def run_backtest(ticker: str, model: FairValueModel,
 
     return BacktestResult(
         model_name=model.name,
-        realized_pnl_cents=pnl_cents,
+        realized_pnl_ticks=pnl_ticks,
         n_fills=n_fills,
-        max_drawdown_cents=max_dd,
+        max_drawdown_ticks=max_dd,
         predictions=predictions,
         outcomes=outcomes,
     )
@@ -168,9 +169,9 @@ if __name__ == "__main__":
     for model in [NaiveMidModel(), LogisticCalibratedModel()]:
         result = run_backtest(args.ticker, model)
         print(f"\n--- {result.model_name} ---")
-        print(f"Realized P&L (cents): {result.realized_pnl_cents:.1f}")
+        print(f"Realized P&L (ticks): {result.realized_pnl_ticks:.1f}")
         print(f"Fills: {result.n_fills}")
-        print(f"Max drawdown (cents): {result.max_drawdown_cents:.1f}")
+        print(f"Max drawdown (ticks): {result.max_drawdown_ticks:.1f}")
         cal = result.calibration()
         if cal:
             print(f"Brier score: {cal.brier_score:.4f} (n={cal.n_predictions})")

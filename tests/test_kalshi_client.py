@@ -5,14 +5,14 @@ import pytest
 
 from data.kalshi_client import (
     KalshiClient,
-    dollars_to_cents,
+    dollars_to_ticks,
     fixed_point_to_decimal,
     normalize_market,
     normalize_trade,
 )
 
 
-def test_current_market_payload_is_normalized_to_cents_and_decimals():
+def test_current_market_payload_is_normalized_to_ticks_and_decimals():
     market = {
         "ticker": "KXFED-26JUL-T4.50",
         "yes_bid_dollars": "0.5600",
@@ -27,11 +27,11 @@ def test_current_market_payload_is_normalized_to_cents_and_decimals():
 
     normalized = normalize_market(market)
 
-    assert normalized["yes_bid"] == 56
-    assert normalized["yes_ask"] == 58
-    assert normalized["no_bid"] == 42
-    assert normalized["no_ask"] == 44
-    assert normalized["last_price"] == 57
+    assert normalized["yes_bid"] == 5600
+    assert normalized["yes_ask"] == 5800
+    assert normalized["no_bid"] == 4200
+    assert normalized["no_ask"] == 4400
+    assert normalized["last_price"] == 5700
     assert normalized["volume"] == Decimal("1234.50")
     assert normalized["volume_24h"] == Decimal("45.25")
     assert normalized["open_interest"] == Decimal("100.00")
@@ -55,9 +55,9 @@ def test_current_orderbook_payload_uses_dollar_prices_and_fixed_point_counts(mon
     finally:
         client.close()
 
-    assert book.best_yes_bid == 42
-    assert book.best_no_bid == 56
-    assert book.best_yes_ask == 44
+    assert book.best_yes_bid == 4200
+    assert book.best_no_bid == 5600
+    assert book.best_yes_ask == 4400
     assert book.mid_prob == pytest.approx(0.43)
     assert book.yes_bids[0].count == Decimal("13.00")
     assert book.no_bids[0].count == Decimal("17.25")
@@ -109,9 +109,9 @@ def test_current_trade_payload_is_normalized():
 
     normalized = normalize_trade(trade)
 
-    assert normalized["yes_price"] == 56
-    assert normalized["no_price"] == 44
-    assert normalized["price"] == 56
+    assert normalized["yes_price"] == 5600
+    assert normalized["no_price"] == 4400
+    assert normalized["price"] == 5600
     assert normalized["count"] == Decimal("10.50")
 
 
@@ -150,10 +150,11 @@ def test_empty_book_and_missing_optional_market_fields_are_supported(monkeypatch
     assert normalize_market({"ticker": "KXTEST-EMPTY"})["yes_bid"] is None
 
 
-def test_invalid_or_sub_cent_values_are_not_silently_rounded():
-    assert dollars_to_cents("0.5600") == 56
+def test_price_ticks_preserve_sub_cent_values_without_rounding():
+    assert dollars_to_ticks("0.5600") == 5600
+    assert dollars_to_ticks("0.5650") == 5650
     assert fixed_point_to_decimal("10.50") == Decimal("10.50")
-    with pytest.raises(ValueError, match="sub-cent"):
-        dollars_to_cents("0.5650")
+    with pytest.raises(ValueError, match="1/10,000"):
+        dollars_to_ticks("0.56501")
     with pytest.raises(ValueError, match="invalid fixed-point"):
         fixed_point_to_decimal("not-a-number")

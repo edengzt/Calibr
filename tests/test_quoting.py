@@ -21,8 +21,8 @@ def test_flat_inventory_quote_centers_on_fair_value():
     q = engine.quote("TICK", fair_value=0.5, inventory=inv, sigma2=0.01,
                       time_to_resolution_days=1.0)
     assert q is not None
-    mid = (q.bid_cents + q.ask_cents) / 2
-    assert abs(mid - 50) <= 1  # centered near 50c when flat
+    mid = (q.bid_ticks + q.ask_ticks) / 2
+    assert abs(mid - 5000) <= 100  # centered near 50c when flat
 
 
 def test_long_inventory_skews_quote_down():
@@ -35,8 +35,8 @@ def test_long_inventory_skews_quote_down():
     q_long = engine.quote("TICK", fair_value=0.6, inventory=long_pos, sigma2=0.02,
                           time_to_resolution_days=2.0)
 
-    mid_flat = (q_flat.bid_cents + q_flat.ask_cents) / 2
-    mid_long = (q_long.bid_cents + q_long.ask_cents) / 2
+    mid_flat = (q_flat.bid_ticks + q_flat.ask_ticks) / 2
+    mid_long = (q_long.bid_ticks + q_long.ask_ticks) / 2
     # Being long should pull the quote down (encourages selling, works
     # inventory back toward flat).
     assert mid_long < mid_flat

@@ -8,7 +8,7 @@ limits so the strategy can never blow through configured position caps.
 Reference: Avellaneda & Stoikov (2008), "High-frequency trading in a
 limit order book." The reservation price formula below is the standard
 one; the mapping onto bounded probability contracts (clamping to [0.01,
-0.99], expressing prices in cents) is this project's adaptation.
+0.99], expressing prices in integer 1/10,000-dollar ticks) is this project's adaptation.
 """
 from __future__ import annotations
 
@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import STRATEGY
+from data.kalshi_client import PRICE_TICKS_PER_DOLLAR
 
 
 @dataclass
 class Quote:
     ticker: str
-    bid_cents: int
-    ask_cents: int
+    bid_ticks: int
+    ask_ticks: int
     size: int
     reason: Optional[str] = None  # set when the quote is pulled/widened for risk reasons
 
@@ -98,8 +99,8 @@ class QuotingEngine:
 
         return Quote(
             ticker=ticker,
-            bid_cents=round(bid_prob * 100),
-            ask_cents=round(ask_prob * 100),
+            bid_ticks=round(bid_prob * PRICE_TICKS_PER_DOLLAR),
+            ask_ticks=round(ask_prob * PRICE_TICKS_PER_DOLLAR),
             size=self.base_size,
         )
 

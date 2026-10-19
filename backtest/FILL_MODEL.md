@@ -47,5 +47,5 @@ instead of guessing.
   supplied. A configured per-contract fee is deducted from cash on every fill.
 - `RiskLimits` are explicit simulation inputs. A fill that would breach either
   the per-market or aggregate limit is rejected and recorded in the trace.
-- Cash and contract inventory use `Decimal`; P&L can be marked to a YES price
-  in cents or settled at 100 cents (YES outcome) / 0 cents (NO outcome).
+- Cash and contract inventory use `Decimal`; P&L uses integer price ticks
+  (10,000 ticks = $1) and settles at 10,000 ticks (YES outcome) / 0 ticks (NO outcome).

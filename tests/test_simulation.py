@@ -30,11 +30,11 @@ def replay_event(ts=T0):
                         "yes_dollars": [["0.42", "10"]],
                         "no_dollars": [["0.56", "10"]],
                     },
-                    "yes_bid": 42,
-                    "yes_ask": 44,
-                    "no_bid": 56,
-                    "no_ask": 58,
-                    "last_price": 43,
+                    "yes_bid": 4200,
+                    "yes_ask": 4400,
+                    "no_bid": 5600,
+                    "no_ask": 5800,
+                    "last_price": 4300,
                 }
             ]
         )
@@ -46,18 +46,18 @@ def order(order_id, price, quantity=Decimal("5"), submitted_at=T0, expires_at=No
         order_id=order_id,
         ticker=TICKER,
         side=OrderSide.BUY_YES,
-        price_cents=price,
+        price_ticks=price,
         quantity=quantity,
         submitted_at=submitted_at,
         expires_at=expires_at,
     )
 
 
-def trade(price=42, quantity=Decimal("10"), side=OrderSide.SELL_YES, ts=T0 + timedelta(seconds=1)):
+def trade(price=4200, quantity=Decimal("10"), side=OrderSide.SELL_YES, ts=T0 + timedelta(seconds=1)):
     return MarketTrade(
         trade_id="trade-1",
         ticker=TICKER,
-        price_cents=price,
+        price_ticks=price,
         quantity=quantity,
         occurred_at=ts,
         aggressor_side=side,
@@ -76,7 +76,7 @@ def test_kalshi_trade_direction_adapter_uses_current_and_legacy_values():
             "trade_id": "db-trade-1",
             "ticker": TICKER,
             "ts": T0,
-            "price": 42,
+            "price": 4200,
             "count": Decimal("3.5"),
             "taker_outcome_side": "no",
             "taker_side": "yes",
@@ -94,7 +94,7 @@ def test_simulation_shares_observed_trade_capacity_by_price_time_priority():
         ticker=TICKER,
         replay_events=[replay_event()],
         trades=[trade()],
-        orders=[order("best", 44), order("next", 43)],
+        orders=[order("best", 4400), order("next", 4300)],
         outcome=1,
     )
 
@@ -103,8 +103,8 @@ def test_simulation_shares_observed_trade_capacity_by_price_time_priority():
     assert fill.order_id == "best"
     assert fill.quantity == Decimal("2.5")
     assert result.state.orders["next"].filled_quantity == Decimal("0")
-    assert result.marks[0].yes_mark_cents == 43
-    assert result.settlement_pnl_cents == Decimal("140")
+    assert result.marks[0].yes_mark_ticks == 4300
+    assert result.settlement_pnl_ticks == Decimal("14000")
     assert [entry.kind for entry in result.trace] == ["submit", "submit", "snapshot", "trade", "fill", "settlement"]
 
 
@@ -112,14 +112,14 @@ def test_simulation_records_trade_but_does_not_fill_at_touch_or_unknown_directio
     at_touch = run_simulation(
         ticker=TICKER,
         replay_events=[replay_event()],
-        trades=[trade(price=42)],
-        orders=[order("touch", 42)],
+        trades=[trade(price=4200)],
+        orders=[order("touch", 4200)],
     )
     unknown_direction = run_simulation(
         ticker=TICKER,
         replay_events=[replay_event()],
         trades=[trade(side=None)],
-        orders=[order("unknown", 44)],
+        orders=[order("unknown", 4400)],
     )
 
     assert at_touch.state.fills == []
@@ -145,7 +145,7 @@ def test_simulation_traces_and_rejects_risk_breaching_fill():
         ticker=TICKER,
         replay_events=[replay_event()],
         trades=[trade()],
-        orders=[order("limited", 44)],
+        orders=[order("limited", 4400)],
         risk_limits=RiskLimits(Decimal("1"), Decimal("1")),
     )
 

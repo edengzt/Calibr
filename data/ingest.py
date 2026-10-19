@@ -26,7 +26,12 @@ from decimal import Decimal, InvalidOperation
 from itertools import islice
 from typing import Any
 
-from data.kalshi_client import KalshiClient, dollars_to_cents, fixed_point_to_decimal
+from data.kalshi_client import (
+    PRICE_TICKS_PER_DOLLAR,
+    KalshiClient,
+    dollars_to_ticks,
+    fixed_point_to_decimal,
+)
 from db.db import get_conn
 from psycopg.types.json import Json
 
@@ -74,14 +79,14 @@ def insert_snapshot(conn, m: dict, raw_book: dict | None = None) -> None:
     Insert one orderbook snapshot row.
 
     list_markets returns top-level yes_bid / no_bid fields which are the
-    best resting bids (cents). Ask prices are derived (binary market sum = 100¢).
+    best resting bids (price ticks). Ask prices are derived (binary market sum = $1).
     raw_book is left NULL here; use get_orderbook() if you need full depth.
     """
     yes_bid = m.get("yes_bid")
     no_bid  = m.get("no_bid")
     # Derive asks from the reciprocal-bid relationship
-    yes_ask = (100 - no_bid)  if no_bid  is not None else None
-    no_ask  = (100 - yes_bid) if yes_bid is not None else None
+    yes_ask = (PRICE_TICKS_PER_DOLLAR - no_bid) if no_bid is not None else None
+    no_ask = (PRICE_TICKS_PER_DOLLAR - yes_bid) if yes_bid is not None else None
 
     conn.execute(
         """
@@ -187,7 +192,7 @@ def validate_raw_book(raw_book: object) -> dict[str, Any]:
     A raw book is replayable only when it contains at least one recognized
     side and every level can be parsed as a price/quantity pair.  One-sided
     books are valid: an empty or absent opposing side is normal in thin
-    markets.  An empty object, malformed level, or sub-cent price is not
+    markets. An empty object or malformed level is not
     counted as a full-depth capture.
     """
     if not isinstance(raw_book, dict):
@@ -215,7 +220,7 @@ def validate_raw_book(raw_book: object) -> dict[str, Any]:
                 raise ValueError(f"orderbook side {side!r} level {index} must be [price, count]")
             price, count = level
             if dollar_prices:
-                if dollars_to_cents(price) is None:
+                if dollars_to_ticks(price) is None:
                     raise ValueError(f"orderbook side {side!r} level {index} has no price")
             else:
                 try:

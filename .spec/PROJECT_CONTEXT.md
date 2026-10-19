@@ -98,7 +98,7 @@ Source: [Kalshi Get Markets reference](https://docs.kalshi.com/api-reference/mar
 | --- | --- | --- |
 | Public REST reachability | Verified | `KalshiClient.list_markets()` fetched five markets using the current external API host. |
 | Market discovery | Verified | Smoke test returned market tickers and titles. |
-| Price parsing | Verified by unit tests | Current market, orderbook, and trade fields normalize to cents and exact fixed-point quantities. |
+| Price parsing | Verified by unit tests | Current market, orderbook, and trade fields normalize to integer 1/10,000-dollar ticks and exact fixed-point quantities. |
 | Postgres ingestion | Live polling observed | On 2026-07-16, KXFED completed repeated 98-market passes without errors; direct database row-count verification is still pending. |
 | WebSocket ingestion | Not implemented | Polling REST ingestion is the current path. |
 | Quoting unit tests | Previously documented as passing | Re-run after changes affecting quoting or config. |
@@ -187,6 +187,24 @@ A local React/Vite dashboard and read-only Python API were added to demonstrate 
 
 Verification against local Postgres returned **103 tracked KXFED markets**, **1,960 full-depth snapshots** across **98 captured markets**, and **373 stored trades**. The backend test suite passed with **55 tests**, and the React production build completed successfully. The README includes a screenshot from that verified local dataset.
 
+### Fixed-Point Price Migration (2026-10-18)
+
+Kalshi's current public trade feed includes valid sub-cent dollar prices (for
+example, `$0.0760`). The former whole-cent parser rejected those observations,
+causing any `--capture-trades` ingestion pass containing such a trade to fail.
+All normalized price handling now uses integer ticks where **10,000 ticks =
+$1.00** and **100 ticks = 1¢**. This unit is used by API normalization,
+snapshot/trade persistence, replay, simulator fills and accounting, quote
+output, the legacy engine, and dashboard formatting.
+
+`db/schema.sql` converts existing `SMALLINT` cent-price columns to `INTEGER`
+ticks exactly once when applied; it detects already-converted integer columns,
+so rerunning `python -m db.db` is safe. Local verification applied the schema
+twice, retained an old 15¢ snapshot as 1,500 ticks, and completed one live
+KXFED `--once --capture-trades` pass with **247/247 full books** and no
+sub-cent parsing errors. The pass had no matching trades in its 30-second
+lookback, so a longer live capture is still required for overlap evidence.
+
 ## Next Integration Steps
 
 The authoritative completion plan, acceptance criteria, and evidence checklist are in [`.spec/MILESTONES.md`](MILESTONES.md).
@@ -238,7 +256,7 @@ python -m backtest.replay KXFED-27APR-T4.25 --limit 5 --max-gap-seconds 15
 For a one-order simulator trace (zero fills are expected until trade backfill is populated):
 
 ```powershell
-python -m backtest.simulation KXFED-27APR-T4.25 --side buy_yes --price 21 --quantity 5 --limit 12
+python -m backtest.simulation KXFED-27APR-T4.25 --side buy_yes --price 2100 --quantity 5 --limit 12
 ```
 
 Do not commit `.env`; it may contain credentials.

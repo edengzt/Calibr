@@ -32,29 +32,29 @@ import httpx
 from config import KALSHI
 
 
+PRICE_TICKS_PER_DOLLAR = 10_000
+PRICE_TICKS_PER_CENT = 100
+
+
 class KalshiRateLimitError(Exception):
     pass
 
 
-def dollars_to_cents(value: Any) -> Optional[int]:
-    """Convert Kalshi's fixed-point dollar price to an exact integer-cent price.
-
-    The project stores and quotes prices in cents. Refuse sub-cent prices so an
-    upstream API change cannot silently alter a quote or a stored observation.
-    """
+def dollars_to_ticks(value: Any) -> Optional[int]:
+    """Convert a dollar price to exact 1/10,000-dollar ticks (0–10,000)."""
     if value is None:
         return None
     if isinstance(value, bool):
         raise ValueError("price must be a dollar string or number, not bool")
     try:
-        cents = Decimal(str(value)) * 100
+        ticks = Decimal(str(value)) * PRICE_TICKS_PER_DOLLAR
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"invalid dollar price: {value!r}") from exc
-    if cents != cents.to_integral_value():
-        raise ValueError(f"sub-cent price cannot be represented as cents: {value!r}")
-    if not Decimal("0") <= cents <= Decimal("100"):
+    if ticks != ticks.to_integral_value():
+        raise ValueError(f"price cannot be represented as 1/10,000-dollar ticks: {value!r}")
+    if not Decimal("0") <= ticks <= Decimal(PRICE_TICKS_PER_DOLLAR):
         raise ValueError(f"price is outside the binary-contract range: {value!r}")
-    return int(cents)
+    return int(ticks)
 
 
 def fixed_point_to_decimal(value: Any) -> Optional[Decimal]:
@@ -73,9 +73,9 @@ def fixed_point_to_decimal(value: Any) -> Optional[Decimal]:
 
 
 def _normalized_price(payload: dict[str, Any], legacy_field: str, dollar_field: str) -> Optional[int]:
-    """Read a current dollar field, falling back to a legacy integer-cent field."""
+    """Read a dollar price, falling back to a legacy integer-cent field."""
     if dollar_field in payload and payload[dollar_field] is not None:
-        return dollars_to_cents(payload[dollar_field])
+        return dollars_to_ticks(payload[dollar_field])
     value = payload.get(legacy_field)
     if value is None:
         return None
@@ -87,7 +87,7 @@ def _normalized_price(payload: dict[str, Any], legacy_field: str, dollar_field: 
         raise ValueError(f"invalid legacy cent price: {value!r}") from exc
     if cents != cents.to_integral_value() or not Decimal("0") <= cents <= Decimal("100"):
         raise ValueError(f"invalid legacy cent price: {value!r}")
-    return int(cents)
+    return int(cents) * PRICE_TICKS_PER_CENT
 
 
 def _normalized_quantity(payload: dict[str, Any], legacy_field: str, fp_field: str) -> Optional[Decimal]:
@@ -98,7 +98,7 @@ def _normalized_quantity(payload: dict[str, Any], legacy_field: str, fp_field: s
 
 
 def normalize_market(market: dict[str, Any]) -> dict[str, Any]:
-    """Add the project's legacy cents/numeric aliases to a current market payload.
+    """Add normalized price-tick and quantity aliases to a market payload.
 
     Original API fields are retained so callers can migrate deliberately.
     """
@@ -121,7 +121,7 @@ def normalize_market(market: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_trade(trade: dict[str, Any]) -> dict[str, Any]:
-    """Add cents/numeric aliases to a current Kalshi trade payload."""
+    """Add normalized price-tick and quantity aliases to a current trade payload."""
     normalized = dict(trade)
     normalized["yes_price"] = _normalized_price(trade, "yes_price", "yes_price_dollars")
     normalized["no_price"] = _normalized_price(trade, "no_price", "no_price_dollars")
@@ -132,7 +132,7 @@ def normalize_trade(trade: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass
 class OrderbookLevel:
-    price_cents: int
+    price_ticks: int
     count: Decimal
 
 
@@ -145,40 +145,39 @@ class OrderbookSnapshot:
 
     @property
     def best_yes_bid(self) -> Optional[int]:
-        """Best YES bid price in cents (1–99)."""
-        return self.yes_bids[0].price_cents if self.yes_bids else None
+        """Best YES bid in 1/10,000-dollar ticks."""
+        return self.yes_bids[0].price_ticks if self.yes_bids else None
 
     @property
     def best_no_bid(self) -> Optional[int]:
-        """Best NO bid price in cents (1–99)."""
-        return self.no_bids[0].price_cents if self.no_bids else None
+        """Best NO bid in 1/10,000-dollar ticks."""
+        return self.no_bids[0].price_ticks if self.no_bids else None
 
     @property
     def best_yes_ask(self) -> Optional[int]:
         """
-        Derived YES ask = 100 - best_no_bid.
-        In a binary market, a NO bid at N¢ is equivalent to a YES ask at (100-N)¢.
+        Derived YES ask = 10,000 - best_no_bid.
         """
         nob = self.best_no_bid
-        return (100 - nob) if nob is not None else None
+        return (PRICE_TICKS_PER_DOLLAR - nob) if nob is not None else None
 
     @property
     def best_no_ask(self) -> Optional[int]:
-        """Derived NO ask = 100 - best_yes_bid."""
+        """Derived NO ask = 10,000 - best_yes_bid."""
         yb = self.best_yes_bid
-        return (100 - yb) if yb is not None else None
+        return (PRICE_TICKS_PER_DOLLAR - yb) if yb is not None else None
 
     @property
     def mid_prob(self) -> Optional[float]:
         """
         Midpoint probability in [0, 1].
-        Uses (best_yes_bid + best_yes_ask) / 2 / 100.
+        Uses (best_yes_bid + best_yes_ask) / 2 / 10,000.
         """
         bid = self.best_yes_bid
         ask = self.best_yes_ask
         if bid is None or ask is None:
             return None
-        return (bid + ask) / 2.0 / 100.0
+        return (bid + ask) / 2.0 / PRICE_TICKS_PER_DOLLAR
 
 
 class KalshiClient:
@@ -267,33 +266,33 @@ class KalshiClient:
         book = raw.get("orderbook_fp") or raw.get("orderbook", raw)
 
         # Current Kalshi responses use [price_dollars, count_fp] arrays in
-        # orderbook_fp. Retain support for the legacy [price_cents, count]
-        # response while normalizing both shapes to cents + Decimal count.
+        # orderbook_fp. Retain support for the legacy [price_ticks, count]
+        # response while normalizing both shapes to ticks + Decimal count.
         if "yes_dollars" in book or "no_dollars" in book:
             yes_bids = [
-                OrderbookLevel(price_cents=dollars_to_cents(price), count=fixed_point_to_decimal(count))
+                OrderbookLevel(price_ticks=dollars_to_ticks(price), count=fixed_point_to_decimal(count))
                 for price, count in book.get("yes_dollars", [])
             ]
             no_bids = [
-                OrderbookLevel(price_cents=dollars_to_cents(price), count=fixed_point_to_decimal(count))
+                OrderbookLevel(price_ticks=dollars_to_ticks(price), count=fixed_point_to_decimal(count))
                 for price, count in book.get("no_dollars", [])
             ]
         else:
             yes_bids = [
-                OrderbookLevel(price_cents=_normalized_price({"price": price}, "price", "price_dollars"),
+                OrderbookLevel(price_ticks=_normalized_price({"price": price}, "price", "price_dollars"),
                                count=fixed_point_to_decimal(count))
                 for price, count in book.get("yes", [])
             ]
             no_bids = [
-                OrderbookLevel(price_cents=_normalized_price({"price": price}, "price", "price_dollars"),
+                OrderbookLevel(price_ticks=_normalized_price({"price": price}, "price", "price_dollars"),
                                count=fixed_point_to_decimal(count))
                 for price, count in book.get("no", [])
             ]
         return OrderbookSnapshot(
             ticker=ticker,
             ts=time.time(),
-            yes_bids=sorted(yes_bids, key=lambda lv: -lv.price_cents),
-            no_bids=sorted(no_bids, key=lambda lv: -lv.price_cents),
+            yes_bids=sorted(yes_bids, key=lambda lv: -lv.price_ticks),
+            no_bids=sorted(no_bids, key=lambda lv: -lv.price_ticks),
         )
 
     def get_orderbooks(self, tickers: list[str]) -> dict[str, dict[str, Any]]:

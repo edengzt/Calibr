@@ -17,7 +17,7 @@ This is a market-data and simulation portfolio piece first. Calibration remains 
 ## Current Implementation Status (2026-07-16)
 
 - The public Kalshi connectivity smoke test has succeeded from a developer machine using `https://external-api.kalshi.com/trade-api/v2`.
-- `data/kalshi_client.py` normalizes current dollar-string and fixed-point fields into the project's cents/`Decimal` aliases, with payload-based unit tests. The database schema uses `NUMERIC(20, 4)` for fixed-point volume, open-interest, and trade-count values.
+- `data/kalshi_client.py` normalizes current dollar-string prices into exact integer ticks (10,000 ticks = $1) and fixed-point quantities into `Decimal`, with payload-based unit tests. The database schema uses `NUMERIC(20, 4)` for fixed-point volume, open-interest, and trade-count values.
 - Live PostgreSQL-backed polling was observed on 2026-07-16: the KXFED loop completed repeated 98-market passes without errors. The loop is continuous by design; stop it with `Ctrl+C` after collecting the desired observation window. A bounded `--once` mode is available for repeatable integration checks.
 - Full-depth capture is implemented: the ingester calls Kalshi's batch orderbooks endpoint in batches of 100 and stores the lossless raw payload in `orderbook_snapshots.raw_book`. Use `python -m data.ingest --series-ticker KXFED --once` for a bounded pass, followed by `python -m data.verify_ingestion --series-ticker KXFED` to check stored coverage.
 - Full-depth persistence was verified on 2026-07-16: a bounded KXFED pass captured 98/98 raw books. At verification time the database contained 98 KXFED markets and 3,136 snapshots, including 98 full-depth raw-book snapshots.
@@ -69,7 +69,7 @@ This extends an existing project called "Social Stock Exchange" (a real-time new
   - `/series`
   - `/historical/markets`, `/historical/trades` (for data older than the live/historical cutoff — check `/historical/cutoff`)
 - **Rate limits**: token-bucket model; build in exponential backoff and respect bucket headers.
-- **Price convention**: prices quoted in cents (1–99), directly interpretable as implied probability — convenient for calibration math.
+- **Price convention**: Kalshi displays dollar prices; internally Calibr uses integer ticks (10,000 = $1), directly convertible to implied probability without rounding.
 
 ### Polymarket (Stretch Goal)
 Three separate services:

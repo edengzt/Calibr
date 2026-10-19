@@ -18,11 +18,11 @@ CREATE TABLE IF NOT EXISTS orderbook_snapshots (
     id                  BIGSERIAL PRIMARY KEY,
     ticker              TEXT NOT NULL REFERENCES markets(ticker),
     ts                  TIMESTAMPTZ NOT NULL,
-    yes_bid             SMALLINT,   -- cents, 1-99
-    yes_ask             SMALLINT,
-    no_bid              SMALLINT,
-    no_ask              SMALLINT,
-    last_price          SMALLINT,
+    yes_bid             INTEGER,    -- 1/10,000-dollar ticks, 0-10,000
+    yes_ask             INTEGER,
+    no_bid              INTEGER,
+    no_ask              INTEGER,
+    last_price          INTEGER,
     volume              NUMERIC(20, 4),
     volume_24h          NUMERIC(20, 4),
     open_interest       NUMERIC(20, 4),
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS trades (
     trade_id            TEXT UNIQUE,  -- Kalshi's own UUID; used for idempotent backfill
     ticker              TEXT NOT NULL REFERENCES markets(ticker),
     ts                  TIMESTAMPTZ NOT NULL,
-    price               SMALLINT,   -- cents
+    price               INTEGER,    -- 1/10,000-dollar ticks
     count               NUMERIC(20, 4),
     taker_side          TEXT,       -- legacy 'yes' or 'no'
     taker_outcome_side  TEXT,       -- canonical current API direction: 'yes' or 'no'
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS fills (
     ticker              TEXT NOT NULL REFERENCES markets(ticker),
     ts                  TIMESTAMPTZ NOT NULL,
     side                TEXT NOT NULL,   -- 'yes' or 'no'
-    price               SMALLINT NOT NULL, -- cents
+    price               INTEGER NOT NULL, -- 1/10,000-dollar ticks
     count               INTEGER NOT NULL,
     run_id              TEXT NOT NULL    -- ties fills together for a single backtest/live run
 );
@@ -97,3 +97,49 @@ ALTER TABLE trades
 ALTER TABLE trades
     ADD COLUMN IF NOT EXISTS taker_outcome_side TEXT,
     ADD COLUMN IF NOT EXISTS taker_book_side TEXT;
+
+-- Before 2026-10, prices were stored as whole cents in SMALLINT columns.
+-- Convert those existing rows exactly once as their columns become INTEGER;
+-- a newly initialized schema is already INTEGER and is left unchanged.
+DO $$
+DECLARE
+    v_column TEXT;
+BEGIN
+    FOREACH v_column IN ARRAY ARRAY['yes_bid', 'yes_ask', 'no_bid', 'no_ask', 'last_price']
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'orderbook_snapshots'
+              AND column_name = v_column
+              AND data_type = 'smallint'
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE orderbook_snapshots ALTER COLUMN %1$I TYPE INTEGER USING %1$I::INTEGER * 100',
+                v_column
+            );
+        END IF;
+    END LOOP;
+
+    FOREACH v_column IN ARRAY ARRAY['price']
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'trades'
+              AND column_name = v_column
+              AND data_type = 'smallint'
+        ) THEN
+            EXECUTE format('ALTER TABLE trades ALTER COLUMN %1$I TYPE INTEGER USING %1$I::INTEGER * 100', v_column);
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'fills'
+              AND column_name = v_column
+              AND data_type = 'smallint'
+        ) THEN
+            EXECUTE format('ALTER TABLE fills ALTER COLUMN %1$I TYPE INTEGER USING %1$I::INTEGER * 100', v_column);
+        END IF;
+    END LOOP;
+END $$;

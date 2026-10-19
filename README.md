@@ -7,7 +7,7 @@ The project is deliberately medium-frequency: calibration quality, transparent r
 ## What works today
 
 - Public Kalshi REST connectivity through the current external API host.
-- Dollar and fixed-point API responses normalized to cent prices and exact `Decimal` quantities.
+- Dollar and fixed-point API responses normalized to exact 1/10,000-dollar price ticks and `Decimal` quantities.
 - Full-depth orderbook capture through Kalshi's batch endpoint, stored losslessly in Postgres JSONB.
 - Bounded (`--once`) and continuous polling ingestion modes.
 - Calibration, fair-value, and inventory-aware quoting modules with unit tests.
@@ -43,6 +43,17 @@ For a reproducible multi-pass capture window, use `--passes` rather than stoppin
 ```powershell
 python -m data.ingest --series-ticker KXFED --interval 10 --passes 30 --verbose
 python -m data.verify_ingestion --series-ticker KXFED
+```
+
+Price fields use integer ticks throughout the pipeline: `10,000` ticks equals
+`$1.00` and `100` ticks equals `1¢`. This preserves Kalshi's four-decimal
+prices (for example, `$0.0760` is `760` ticks) without floating-point rounding.
+
+To capture contemporaneous trade evidence alongside order books, add
+`--capture-trades`:
+
+```powershell
+python -m data.ingest --series-ticker KXFED --interval 10 --passes 360 --capture-trades --verbose
 ```
 
 ## Key paths

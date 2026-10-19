@@ -112,7 +112,7 @@ def test_insert_trades_preserves_direction_fields_and_counts_only_new_rows():
     [
         {},
         {"yes_dollars": "not-a-list"},
-        {"yes_dollars": [["0.425", "1"]]},
+        {"yes_dollars": [["0.42501", "1"]]},
         {"yes_dollars": [["0.42"]]},
         {"yes_dollars": [["0.42", "not-a-number"]]},
         {"yes_dollars": [[None, "1"]]},
@@ -192,9 +192,9 @@ def test_insert_snapshot_wraps_full_book_as_jsonb():
     raw_book = {"yes_dollars": [["0.42", "10.00"]], "no_dollars": []}
     market = {
         "ticker": "KX-TEST",
-        "yes_bid": 42,
-        "no_bid": 56,
-        "last_price": 43,
+        "yes_bid": 4200,
+        "no_bid": 5600,
+        "last_price": 4300,
         "volume": 10,
         "volume_24h": 2,
         "open_interest": 12,
@@ -204,5 +204,5 @@ def test_insert_snapshot_wraps_full_book_as_jsonb():
 
     assert isinstance(conn.params["raw_book"], Json)
     assert conn.params["raw_book"].obj == raw_book
-    assert conn.params["yes_ask"] == 44
-    assert conn.params["no_ask"] == 58
+    assert conn.params["yes_ask"] == 4400
+    assert conn.params["no_ask"] == 5800

@@ -25,7 +25,7 @@ def make_order(**overrides):
         "order_id": "order-1",
         "ticker": "KXFED-TEST",
         "side": OrderSide.BUY_YES,
-        "price_cents": 42,
+        "price_ticks": 4200,
         "quantity": Decimal("10.5"),
         "submitted_at": NOW,
     }
@@ -39,7 +39,7 @@ def make_fill(**overrides):
         "order_id": "order-1",
         "ticker": "KXFED-TEST",
         "side": OrderSide.BUY_YES,
-        "price_cents": 42,
+        "price_ticks": 4200,
         "quantity": Decimal("4.25"),
         "filled_at": NOW + timedelta(seconds=1),
         "evidence_id": "trade-1",
@@ -52,7 +52,7 @@ def make_trade(**overrides):
     values = {
         "trade_id": "trade-1",
         "ticker": "KXFED-TEST",
-        "price_cents": 41,
+        "price_ticks": 4100,
         "quantity": Decimal("8"),
         "occurred_at": NOW + timedelta(seconds=1),
         "aggressor_side": OrderSide.SELL_YES,
@@ -77,8 +77,8 @@ def test_order_tracks_partial_and_complete_fills_exactly():
 
 
 def test_order_validates_limits_quantity_and_lifecycle_times():
-    with pytest.raises(ValueError, match="between 1 and 99"):
-        make_order(price_cents=100)
+    with pytest.raises(ValueError, match="between 1 and 9,999"):
+        make_order(price_ticks=10_000)
     with pytest.raises(ValueError, match="positive"):
         make_order(quantity=Decimal("0"))
     with pytest.raises(ValueError, match="cannot precede"):
@@ -91,7 +91,7 @@ def test_state_applies_buy_and_sell_fills_to_cash_and_inventory():
     sell = make_order(
         order_id="order-2",
         side=OrderSide.SELL_YES,
-        price_cents=58,
+        price_ticks=5800,
         quantity=Decimal("2"),
     )
     state.submit(buy)
@@ -103,7 +103,7 @@ def test_state_applies_buy_and_sell_fills_to_cash_and_inventory():
             fill_id="fill-2",
             order_id="order-2",
             side=OrderSide.SELL_YES,
-            price_cents=58,
+            price_ticks=5800,
             quantity=Decimal("2"),
             evidence_id="trade-2",
         )
@@ -111,10 +111,10 @@ def test_state_applies_buy_and_sell_fills_to_cash_and_inventory():
 
     ledger = state.ledger("KXFED-TEST")
     assert ledger.position == Decimal("2.25")
-    assert ledger.cash_cents == Decimal("-62.5")
-    assert ledger.mark_to_market_cents(50) == Decimal("50")
-    assert ledger.settlement_pnl_cents(1) == Decimal("162.5")
-    assert ledger.settlement_pnl_cents(0) == Decimal("-62.5")
+    assert ledger.cash_ticks == Decimal("-6250")
+    assert ledger.mark_to_market_ticks(5000) == Decimal("5000")
+    assert ledger.settlement_pnl_ticks(1) == Decimal("16250")
+    assert ledger.settlement_pnl_ticks(0) == Decimal("-6250")
 
 
 def test_state_rejects_untraceable_or_inconsistent_fills():
@@ -140,7 +140,7 @@ def test_conservative_policy_requires_strict_opposite_side_trade_and_caps_quanti
     assert decision.approved is True
     assert decision.quantity == Decimal("2")  # 25% of the observed eight-contract print
 
-    assert policy.decide(order, make_trade(price_cents=42)).reason == "trade_did_not_strictly_cross_limit"
+    assert policy.decide(order, make_trade(price_ticks=4200)).reason == "trade_did_not_strictly_cross_limit"
     assert policy.decide(order, make_trade(aggressor_side=OrderSide.BUY_YES)).reason == "non_crossing_aggressor_side"
     assert policy.decide(order, make_trade(aggressor_side=None)).reason == "unknown_aggressor_side"
     assert policy.decide(order, make_trade(occurred_at=NOW)).reason == "trade_not_after_submission"
@@ -152,14 +152,14 @@ def test_policy_can_explicitly_enable_at_limit_fills_and_apply_fees():
     fill = policy.create_fill(
         fill_id="fill-at-limit",
         order=order,
-        trade=make_trade(price_cents=42, quantity=Decimal("5")),
-        fees=FeeSchedule(per_contract_cents=Decimal("0.5")),
+        trade=make_trade(price_ticks=4200, quantity=Decimal("5")),
+        fees=FeeSchedule(per_contract_ticks=Decimal("50")),
     )
 
     assert fill is not None
     assert fill.quantity == Decimal("3")
-    assert fill.fee_cents == Decimal("1.5")
-    assert fill.cash_delta_cents == Decimal("-127.5")
+    assert fill.fee_ticks == Decimal("150")
+    assert fill.cash_delta_ticks == Decimal("-12750")
 
 
 def test_state_supports_cancel_replace_and_deterministic_expiry():
@@ -170,7 +170,7 @@ def test_state_supports_cancel_replace_and_deterministic_expiry():
     state.submit(second)
 
     replacement_time = NOW + timedelta(seconds=2)
-    replacement = make_order(order_id="a-r1", price_cents=43, submitted_at=replacement_time)
+    replacement = make_order(order_id="a-r1", price_ticks=4300, submitted_at=replacement_time)
     state.replace_order("a", replacement, replacement_time)
 
     assert first.status is OrderStatus.CANCELLED

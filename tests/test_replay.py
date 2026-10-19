@@ -19,11 +19,11 @@ def _row(snapshot_id, ts, raw_book, **overrides):
         "ticker": "KXFED-TEST",
         "ts": ts,
         "raw_book": raw_book,
-        "yes_bid": 42,
-        "yes_ask": 44,
-        "no_bid": 56,
-        "no_ask": 58,
-        "last_price": 43,
+        "yes_bid": 4200,
+        "yes_ask": 4400,
+        "no_bid": 5600,
+        "no_ask": 5800,
+        "last_price": 4300,
     }
     row.update(overrides)
     return row
@@ -38,7 +38,7 @@ def test_decode_current_book_preserves_decimal_quantity_and_sorts_price_levels()
     )
 
     assert book.wire_format == "current_fixed_point"
-    assert [level.price_cents for level in book.yes_bids] == [44, 42]
+    assert [level.price_ticks for level in book.yes_bids] == [4400, 4200]
     assert book.yes_bids[0].count == Decimal("2.125")
 
 
@@ -53,9 +53,9 @@ def test_features_include_mid_spread_depth_and_imbalance():
     )
 
     assert features.status == "two_sided"
-    assert features.best_yes_bid == 42
-    assert features.best_yes_ask == 44
-    assert features.spread_cents == 2
+    assert features.best_yes_bid == 4200
+    assert features.best_yes_ask == 4400
+    assert features.spread_ticks == 200
     assert features.mid_probability == pytest.approx(0.43)
     assert features.yes_displayed_depth == Decimal("10")
     assert features.no_displayed_depth == Decimal("30")

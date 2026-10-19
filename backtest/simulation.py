@@ -27,6 +27,7 @@ from backtest.simulator import (
     SimulatorState,
 )
 from db.db import get_conn
+from data.kalshi_client import PRICE_TICKS_PER_DOLLAR
 
 
 class TradeAdapterError(ValueError):
@@ -45,8 +46,8 @@ class SimulationTraceEntry:
 class MarkToMarket:
     ts: datetime
     ticker: str
-    yes_mark_cents: int
-    pnl_cents: Decimal
+    yes_mark_ticks: int
+    pnl_ticks: Decimal
 
 
 @dataclass
@@ -54,7 +55,7 @@ class SimulationResult:
     state: SimulatorState
     trace: list[SimulationTraceEntry] = field(default_factory=list)
     marks: list[MarkToMarket] = field(default_factory=list)
-    settlement_pnl_cents: Decimal | None = None
+    settlement_pnl_ticks: Decimal | None = None
 
 
 def aggressor_side_from_kalshi(value: str | None) -> OrderSide | None:
@@ -87,7 +88,7 @@ def market_trade_from_row(row: Mapping[str, Any]) -> MarketTrade:
     if price is None or count is None:
         raise TradeAdapterError(f"trade {trade_id} is missing normalized price or quantity")
     try:
-        price_cents = int(price)
+        price_ticks = int(price)
         quantity = Decimal(str(count))
     except (ValueError, TypeError) as exc:
         raise TradeAdapterError(f"trade {trade_id} has invalid normalized price or quantity") from exc
@@ -97,7 +98,7 @@ def market_trade_from_row(row: Mapping[str, Any]) -> MarketTrade:
     return MarketTrade(
         trade_id=trade_id,
         ticker=ticker,
-        price_cents=price_cents,
+        price_ticks=price_ticks,
         quantity=quantity,
         occurred_at=ts,
         aggressor_side=aggressor_side_from_kalshi(direction),
@@ -140,8 +141,8 @@ def iter_market_trades(
 def _priority(order: SimulatedOrder) -> tuple[Any, ...]:
     """Price-time priority for distributing one observed print conservatively."""
     if order.side is OrderSide.BUY_YES:
-        return (-order.price_cents, order.submitted_at, order.order_id)
-    return (order.price_cents, order.submitted_at, order.order_id)
+        return (-order.price_ticks, order.submitted_at, order.order_id)
+    return (order.price_ticks, order.submitted_at, order.order_id)
 
 
 def _trace(result: SimulationResult, ts: datetime, kind: str, event_id: str, detail: str) -> None:
@@ -187,7 +188,7 @@ def run_simulation(
             if order.ticker != ticker:
                 raise ValueError(f"order {order.order_id} ticker does not match simulation ticker")
             state.submit(order)
-            _trace(result, ts, "submit", order.order_id, f"{order.side.value} {order.quantity} @ {order.price_cents}")
+            _trace(result, ts, "submit", order.order_id, f"{order.side.value} {order.quantity} @ {order.price_ticks}")
         elif kind == "snapshot":
             event = payload
             if event.ticker != ticker:
@@ -195,10 +196,10 @@ def run_simulation(
             if event.features is None or event.features.mid_probability is None:
                 _trace(result, ts, "snapshot", str(event.snapshot_id), f"{event.source}: no valid mid")
             else:
-                mark_cents = round(event.features.mid_probability * 100)
-                pnl = state.ledger(ticker).mark_to_market_cents(mark_cents)
-                result.marks.append(MarkToMarket(ts, ticker, mark_cents, pnl))
-                _trace(result, ts, "snapshot", str(event.snapshot_id), f"mark={mark_cents} pnl={pnl}")
+                mark_ticks = round(event.features.mid_probability * PRICE_TICKS_PER_DOLLAR)
+                pnl = state.ledger(ticker).mark_to_market_ticks(mark_ticks)
+                result.marks.append(MarkToMarket(ts, ticker, mark_ticks, pnl))
+                _trace(result, ts, "snapshot", str(event.snapshot_id), f"mark={mark_ticks} pnl={pnl}")
         else:
             trade = payload
             if trade.ticker != ticker:
@@ -209,7 +210,7 @@ def run_simulation(
                 ts,
                 "trade",
                 trade.trade_id,
-                f"price={trade.price_cents} quantity={trade.quantity} aggressor={trade.aggressor_side}",
+                f"price={trade.price_ticks} quantity={trade.quantity} aggressor={trade.aggressor_side}",
             )
             candidates = sorted(
                 (order for order in state.orders.values() if order.is_active), key=_priority
@@ -240,14 +241,14 @@ def run_simulation(
                     ts,
                     "fill",
                     fill.fill_id,
-                    f"order={fill.order_id} quantity={fill.quantity} price={fill.price_cents} evidence={fill.evidence_id}",
+                    f"order={fill.order_id} quantity={fill.quantity} price={fill.price_ticks} evidence={fill.evidence_id}",
                 )
         last_ts = ts
 
     if outcome is not None:
-        result.settlement_pnl_cents = state.ledger(ticker).settlement_pnl_cents(outcome)
+        result.settlement_pnl_ticks = state.ledger(ticker).settlement_pnl_ticks(outcome)
         settlement_ts = last_ts or datetime.min
-        _trace(result, settlement_ts, "settlement", ticker, f"outcome={outcome} pnl={result.settlement_pnl_cents}")
+        _trace(result, settlement_ts, "settlement", ticker, f"outcome={outcome} pnl={result.settlement_pnl_ticks}")
     return result
 
 
@@ -255,7 +256,7 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Run a conservative one-order simulation over stored data.")
     parser.add_argument("ticker", help="Market ticker to simulate")
     parser.add_argument("--side", choices=[side.value for side in OrderSide], default="buy_yes")
-    parser.add_argument("--price", type=int, required=True, help="YES limit price in cents")
+    parser.add_argument("--price", type=int, required=True, help="YES limit price in 1/10,000-dollar ticks")
     parser.add_argument("--quantity", type=Decimal, required=True, help="Order quantity")
     parser.add_argument("--limit", type=int, default=30, help="Maximum trace rows to print")
     args = parser.parse_args()
@@ -269,7 +270,7 @@ def _main() -> None:
         order_id="cli-order-1",
         ticker=args.ticker,
         side=OrderSide(args.side),
-        price_cents=args.price,
+        price_ticks=args.price,
         quantity=args.quantity,
         submitted_at=first_event.ts - timedelta(microseconds=1),
     )

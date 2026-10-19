@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Iterator, Mapping
 
-from data.kalshi_client import dollars_to_cents, fixed_point_to_decimal
+from data.kalshi_client import PRICE_TICKS_PER_CENT, PRICE_TICKS_PER_DOLLAR, dollars_to_ticks, fixed_point_to_decimal
 from db.db import get_conn
 
 
@@ -33,7 +33,7 @@ class ReplayDecodeError(ValueError):
 class PriceLevel:
     """A resting bid level in Kalshi's YES or NO book."""
 
-    price_cents: int
+    price_ticks: int
     count: Decimal
 
 
@@ -55,7 +55,7 @@ class BookFeatures:
     best_no_bid: int | None
     best_no_ask: int | None
     mid_probability: float | None
-    spread_cents: int | None
+    spread_ticks: int | None
     yes_displayed_depth: Decimal
     no_displayed_depth: Decimal
     order_book_imbalance: float | None
@@ -83,14 +83,14 @@ class ReplayEvent:
     is_stale: bool
 
 
-def _legacy_cents(value: Any) -> int:
+def _legacy_cent_price_to_ticks(value: Any) -> int:
     try:
         cents = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise ReplayDecodeError(f"invalid legacy cent price: {value!r}") from exc
     if cents != cents.to_integral_value() or not Decimal("0") <= cents <= Decimal("100"):
         raise ReplayDecodeError(f"invalid legacy cent price: {value!r}")
-    return int(cents)
+    return int(cents) * PRICE_TICKS_PER_CENT
 
 
 def _decode_side(raw_book: Mapping[str, Any], side: str, *, dollar_prices: bool) -> tuple[PriceLevel, ...]:
@@ -104,15 +104,15 @@ def _decode_side(raw_book: Mapping[str, Any], side: str, *, dollar_prices: bool)
             raise ReplayDecodeError(f"orderbook side {side!r} level {index} must be [price, count]")
         price, count = level
         try:
-            price_cents = dollars_to_cents(price) if dollar_prices else _legacy_cents(price)
+            price_ticks = dollars_to_ticks(price) if dollar_prices else _legacy_cent_price_to_ticks(price)
             quantity = fixed_point_to_decimal(count)
         except ValueError as exc:
             raise ReplayDecodeError(f"invalid orderbook side {side!r} level {index}: {exc}") from exc
-        if price_cents is None or quantity is None:
+        if price_ticks is None or quantity is None:
             raise ReplayDecodeError(f"orderbook side {side!r} level {index} cannot contain null values")
-        decoded.append(PriceLevel(price_cents=price_cents, count=quantity))
+        decoded.append(PriceLevel(price_ticks=price_ticks, count=quantity))
 
-    return tuple(sorted(decoded, key=lambda level: level.price_cents, reverse=True))
+    return tuple(sorted(decoded, key=lambda level: level.price_ticks, reverse=True))
 
 
 def decode_raw_book(raw_book: Mapping[str, Any]) -> OrderBook:
@@ -142,10 +142,10 @@ def decode_raw_book(raw_book: Mapping[str, Any]) -> OrderBook:
 
 def derive_features(book: OrderBook) -> BookFeatures:
     """Calculate book features while preserving missing/crossed-book states."""
-    best_yes_bid = book.yes_bids[0].price_cents if book.yes_bids else None
-    best_no_bid = book.no_bids[0].price_cents if book.no_bids else None
-    best_yes_ask = 100 - best_no_bid if best_no_bid is not None else None
-    best_no_ask = 100 - best_yes_bid if best_yes_bid is not None else None
+    best_yes_bid = book.yes_bids[0].price_ticks if book.yes_bids else None
+    best_no_bid = book.no_bids[0].price_ticks if book.no_bids else None
+    best_yes_ask = PRICE_TICKS_PER_DOLLAR - best_no_bid if best_no_bid is not None else None
+    best_no_ask = PRICE_TICKS_PER_DOLLAR - best_yes_bid if best_yes_bid is not None else None
     yes_depth = sum((level.count for level in book.yes_bids), Decimal("0"))
     no_depth = sum((level.count for level in book.no_bids), Decimal("0"))
     total_depth = yes_depth + no_depth
@@ -161,10 +161,10 @@ def derive_features(book: OrderBook) -> BookFeatures:
         status = "two_sided"
 
     mid_probability = None
-    spread_cents = None
+    spread_ticks = None
     if best_yes_bid is not None and best_yes_ask is not None and not is_crossed:
-        mid_probability = (best_yes_bid + best_yes_ask) / 200
-        spread_cents = best_yes_ask - best_yes_bid
+        mid_probability = (best_yes_bid + best_yes_ask) / (2 * PRICE_TICKS_PER_DOLLAR)
+        spread_ticks = best_yes_ask - best_yes_bid
 
     imbalance = None
     if total_depth > 0:
@@ -176,7 +176,7 @@ def derive_features(book: OrderBook) -> BookFeatures:
         best_no_bid=best_no_bid,
         best_no_ask=best_no_ask,
         mid_probability=mid_probability,
-        spread_cents=spread_cents,
+        spread_ticks=spread_ticks,
         yes_displayed_depth=yes_depth,
         no_displayed_depth=no_depth,
         order_book_imbalance=imbalance,
